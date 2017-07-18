@@ -577,6 +577,8 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, gva_t addr,
 	struct kvm_shadow_walk_iterator it;
 	unsigned direct_access, access = gw->pt_access;
 	int top_level, emulate;
+	unsigned ept_index;
+	ept_index = vmx_get_current_ept_index(vcpu);
 
 	direct_access = gw->pte_access;
 
@@ -595,7 +597,7 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, gva_t addr,
 	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		goto out_gpte_changed;
 
-	for (shadow_walk_init(&it, vcpu, addr);
+	for (shadow_walk_init(&it, vcpu, addr, ept_index);
 	     shadow_walk_okay(&it) && it.level > gw->level;
 	     shadow_walk_next(&it)) {
 		gfn_t table_gfn;
@@ -607,7 +609,7 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, gva_t addr,
 		if (!is_shadow_present_pte(*it.sptep)) {
 			table_gfn = gw->table_gfn[it.level - 2];
 			sp = kvm_mmu_get_page(vcpu, table_gfn, addr, it.level-1,
-					      false, access);
+					      false, access, ept_index);
 		}
 
 		/*
@@ -637,7 +639,7 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, gva_t addr,
 		direct_gfn = gw->gfn & ~(KVM_PAGES_PER_HPAGE(it.level) - 1);
 
 		sp = kvm_mmu_get_page(vcpu, direct_gfn, addr, it.level-1,
-				      true, direct_access);
+				      true, direct_access, ept_index);
 		link_shadow_page(vcpu, it.sptep, sp);
 	}
 
@@ -838,6 +840,8 @@ static void FNAME(invlpg)(struct kvm_vcpu *vcpu, gva_t gva)
 	struct kvm_mmu_page *sp;
 	int level;
 	u64 *sptep;
+	unsigned ept_index;
+	ept_index = vmx_get_current_ept_index(vcpu);
 
 	vcpu_clear_mmio_info(vcpu, gva);
 
@@ -853,7 +857,7 @@ static void FNAME(invlpg)(struct kvm_vcpu *vcpu, gva_t gva)
 	}
 
 	spin_lock(&vcpu->kvm->mmu_lock);
-	for_each_shadow_entry(vcpu, gva, iterator) {
+	for_each_shadow_entry(vcpu, gva, iterator,ept_index) {
 		level = iterator.level;
 		sptep = iterator.sptep;
 

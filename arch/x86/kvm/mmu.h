@@ -87,7 +87,8 @@ static inline unsigned int kvm_mmu_available_pages(struct kvm *kvm)
 
 static inline int kvm_mmu_reload(struct kvm_vcpu *vcpu)
 {
-	if (likely(vcpu->arch.mmu.root_hpa != INVALID_PAGE))
+//	if (likely(vcpu->arch.mmu.root_hpa != INVALID_PAGE))
+	if (likely(vcpu->arch.mmu.ept_root_hpa_list[0] != INVALID_PAGE))
 		return 0;
 
 	return kvm_mmu_load(vcpu);

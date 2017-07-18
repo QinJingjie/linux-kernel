@@ -4290,6 +4290,7 @@ static void vmx_set_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
 	if (enable_ept) {
 		eptp = construct_eptp(cr3);
 		vmcs_write64(EPT_POINTER, eptp);
+		printk(KERN_ERR "kvm: ept =  %016llx \n",eptp);
 		if (is_paging(vcpu) || is_guest_mode(vcpu))
 			guest_cr3 = kvm_read_cr3(vcpu);
 		else
@@ -9270,19 +9271,26 @@ static int init_kvm_tdp_ept_list(struct kvm_vcpu *vcpu){
 	struct page *eptp_list_pg;
 	int i;
 	eptp_list = kmalloc(sizeof(unsigned long) * EPTP_LIST_ENTRIES, GFP_KERNEL);
-	if(!eptp_list)
+	if(!eptp_list){
+		printk(KERN_ERR "kvm: malloc eptp_list failed!\n");
 		return -ENOMEM;
+	}
 	ept_root_hpa_list = kmalloc(sizeof(hpa_t) * EPTP_LIST_ENTRIES, GFP_KERNEL);
     	if (!ept_root_hpa_list)
     	{
         		kfree(eptp_list);
+		printk(KERN_ERR "kvm: malloc ept_root_hpa_list failed!\n");
         		return -ENOMEM;
    	 }
 	vcpu->arch.mmu.eptp_list = eptp_list;
 	vcpu->arch.mmu.ept_root_hpa_list = ept_root_hpa_list;
 	vcpu->arch.mmu.num_epts = 5;
-	eptp_list_pg = alloc_page(GFP_KERNEL | __GFP_ZERO);
-	vcpu->arch.mmu.ept_root_hpa_list = page_to_phys(eptp_list_pg);
+	//eptp_list_pg = alloc_page(GFP_KERNEL | __GFP_ZERO);
+	//if(!eptp_list_pg)
+	//	return -ENOMEM;
+	//printk(KERN_ERR "kvm: alloc page finish \n");
+	//vcpu->arch.mmu.ept_root_hpa_list = page_to_phys(eptp_list_pg);
+	printk(KERN_ERR "kvm: init ept_root_hpa_list \n");
 	for(i=0;i<vcpu->arch.mmu.num_epts;i++){
 		vcpu->arch.mmu.ept_root_hpa_list[i] = INVALID_PAGE;
 	//	if(!vcpu->arch.mmu.ept_root_list[i]){
@@ -9292,6 +9300,8 @@ static int init_kvm_tdp_ept_list(struct kvm_vcpu *vcpu){
 	//	}
 		vcpu->arch.mmu.eptp_list[i] = construct_eptp(vcpu->arch.mmu.ept_root_hpa_list[i]);
 	}
+	vcpu->arch.mmu.eptp = vcpu->arch.mmu.eptp_list[0];
+	printk(KERN_ERR "kvm: init ept return 0 \n");
 	return 0;
 }
 
@@ -9370,9 +9380,11 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 			vm_function_control = vmcs_read64(VM_FUNCTION_CTRL);
 			vm_function_control |= VM_FUNCTION_EPTP_SWITCHING;
 			vmcs_write64(VM_FUNCTION_CTRL, vm_function_control);
-			//if(!init_kvm_tdp_ept_list(&vmx->vcpu)){
-			//	goto free_pml;
-			//}
+			err = init_kvm_tdp_ept_list(&vmx->vcpu);
+			if(err){
+				printk(KERN_ERR "kvm: int ept failed: %d \n", err);
+				goto free_pml;
+			}
 		}
 	}
 

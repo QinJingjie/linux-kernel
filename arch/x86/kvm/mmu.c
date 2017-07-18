@@ -155,13 +155,13 @@ struct kvm_shadow_walk_iterator {
 	unsigned index;
 };
 
-#define for_each_shadow_entry(_vcpu, _addr, _walker)    \
-	for (shadow_walk_init(&(_walker), _vcpu, _addr);	\
+#define for_each_shadow_entry(_vcpu, _addr, _walker,_eptIndex)    \
+	for (shadow_walk_init(&(_walker), _vcpu, _addr,_eptIndex);	\
 	     shadow_walk_okay(&(_walker));			\
 	     shadow_walk_next(&(_walker)))
 
-#define for_each_shadow_entry_lockless(_vcpu, _addr, _walker, spte)	\
-	for (shadow_walk_init(&(_walker), _vcpu, _addr);		\
+#define for_each_shadow_entry_lockless(_vcpu, _addr, _walker, spte, _eptIndex)	\
+	for (shadow_walk_init(&(_walker), _vcpu, _addr, _eptIndex);		\
 	     shadow_walk_okay(&(_walker)) &&				\
 		({ spte = mmu_spte_get_lockless(_walker.sptep); 1; });	\
 	     __shadow_walk_next(&(_walker), spte))
@@ -512,6 +512,22 @@ static bool spte_is_bit_changed(u64 old_spte, u64 new_spte, u64 bit_mask)
 {
 	return (old_spte & bit_mask) != (new_spte & bit_mask);
 }
+
+inline unsigned eptp_to_ept_index(struct kvm_vcpu *vcpu, unsigned long eptp)
+{
+    unsigned i;
+    for (i = 0; i < vcpu->arch.mmu.num_epts; i++)
+        if (vcpu->arch.mmu.eptp_list[i] == eptp)
+            return i;
+
+    return (unsigned)-1;
+}
+
+inline unsigned vmx_get_current_ept_index(struct kvm_vcpu *vcpu)
+{
+    return eptp_to_ept_index(vcpu, vcpu->arch.mmu.eptp);
+}
+
 
 /* Rules for using mmu_spte_set:
  * Set the sptep from nonpresent to present.
@@ -1906,14 +1922,14 @@ static void kvm_mmu_commit_zap_page(struct kvm *kvm,
  *
  * for_each_gfn_valid_sp() has skipped that kind of pages.
  */
-#define for_each_gfn_valid_sp(_kvm, _sp, _gfn)				\
+#define for_each_gfn_valid_sp(_kvm, _sp, _gfn,_eptIndex)				\
 	hlist_for_each_entry(_sp,					\
-	  &(_kvm)->arch.mmu_page_hash[kvm_page_table_hashfn(_gfn)], hash_link) \
+	  &(_kvm)->arch.mmu_page_hash_list[_eptIndex][kvm_page_table_hashfn(_gfn)], hash_link) \
 		if ((_sp)->gfn != (_gfn) || is_obsolete_sp((_kvm), (_sp)) \
 			|| (_sp)->role.invalid) {} else
 
 #define for_each_gfn_indirect_valid_sp(_kvm, _sp, _gfn)			\
-	for_each_gfn_valid_sp(_kvm, _sp, _gfn)				\
+	for_each_gfn_valid_sp(_kvm, _sp, _gfn, 0)				\
 		if ((_sp)->role.direct) {} else
 
 /* @sp->gfn should be write-protected at the call site */
@@ -2109,7 +2125,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 					     gva_t gaddr,
 					     unsigned level,
 					     int direct,
-					     unsigned access)
+					     unsigned access, unsigned ept_index)
 {
 	union kvm_mmu_page_role role;
 	unsigned quadrant;
@@ -2130,7 +2146,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 		quadrant &= (1 << ((PT32_PT_BITS - PT64_PT_BITS) * level)) - 1;
 		role.quadrant = quadrant;
 	}
-	for_each_gfn_valid_sp(vcpu->kvm, sp, gfn) {
+	for_each_gfn_valid_sp(vcpu->kvm, sp, gfn, ept_index) {
 		if (!need_sync && sp->unsync)
 			need_sync = true;
 
@@ -2163,7 +2179,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	sp->gfn = gfn;
 	sp->role = role;
 	hlist_add_head(&sp->hash_link,
-		&vcpu->kvm->arch.mmu_page_hash[kvm_page_table_hashfn(gfn)]);
+		&vcpu->kvm->arch.mmu_page_hash_list[ept_index][kvm_page_table_hashfn(gfn)]);
 	if (!direct) {
 		/*
 		 * we should do write protection before syncing pages
@@ -2187,10 +2203,11 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 }
 
 static void shadow_walk_init(struct kvm_shadow_walk_iterator *iterator,
-			     struct kvm_vcpu *vcpu, u64 addr)
+			     struct kvm_vcpu *vcpu, u64 addr, unsigned ept_index)
 {
 	iterator->addr = addr;
-	iterator->shadow_addr = vcpu->arch.mmu.root_hpa;
+	//iterator->shadow_addr = vcpu->arch.mmu.root_hpa;
+	iterator->shadow_addr = vcpu->arch.mmu.ept_root_hpa_list[ept_index];
 	iterator->level = vcpu->arch.mmu.shadow_root_level;
 
 	if (iterator->level == PT64_ROOT_LEVEL &&
@@ -2742,11 +2759,13 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 	struct kvm_mmu_page *sp;
 	int emulate = 0;
 	gfn_t pseudo_gfn;
+	unsigned ept_index;
+	ept_index = vmx_get_current_ept_index(vcpu);
 
 	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		return 0;
 
-	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator) {
+	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
 		if (iterator.level == level) {
 			emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
 					       write, level, gfn, pfn, prefault,
@@ -2763,7 +2782,7 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 			base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
 			pseudo_gfn = base_addr >> PAGE_SHIFT;
 			sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
-					      iterator.level - 1, 1, ACC_ALL);
+					      iterator.level - 1, 1, ACC_ALL, ept_index);
 
 			link_shadow_page(vcpu, iterator.sptep, sp);
 		}
@@ -2925,6 +2944,8 @@ static bool fast_page_fault(struct kvm_vcpu *vcpu, gva_t gva, int level,
 	struct kvm_mmu_page *sp;
 	bool ret = false;
 	u64 spte = 0ull;
+	unsigned ept_index;
+	ept_index = vmx_get_current_ept_index(vcpu);
 
 	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		return false;
@@ -2933,7 +2954,7 @@ static bool fast_page_fault(struct kvm_vcpu *vcpu, gva_t gva, int level,
 		return false;
 
 	walk_shadow_page_lockless_begin(vcpu);
-	for_each_shadow_entry_lockless(vcpu, gva, iterator, spte)
+	for_each_shadow_entry_lockless(vcpu, gva, iterator, spte, ept_index)
 		if (!is_shadow_present_pte(spte) || iterator.level < level)
 			break;
 
@@ -3109,7 +3130,7 @@ static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
 	return ret;
 }
 
-static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
+static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
 {
 	struct kvm_mmu_page *sp;
 	unsigned i;
@@ -3117,10 +3138,11 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 	if (vcpu->arch.mmu.shadow_root_level == PT64_ROOT_LEVEL) {
 		spin_lock(&vcpu->kvm->mmu_lock);
 		make_mmu_pages_available(vcpu);
-		sp = kvm_mmu_get_page(vcpu, 0, 0, PT64_ROOT_LEVEL, 1, ACC_ALL);
+		sp = kvm_mmu_get_page(vcpu, 0, 0, PT64_ROOT_LEVEL, 1, ACC_ALL, ept_index);
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		vcpu->arch.mmu.root_hpa = __pa(sp->spt);
+		vcpu->arch.mmu.ept_root_hpa_list[ept_index] = __pa(sp->spt);
 	} else if (vcpu->arch.mmu.shadow_root_level == PT32E_ROOT_LEVEL) {
 		for (i = 0; i < 4; ++i) {
 			hpa_t root = vcpu->arch.mmu.pae_root[i];
@@ -3129,7 +3151,7 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 			spin_lock(&vcpu->kvm->mmu_lock);
 			make_mmu_pages_available(vcpu);
 			sp = kvm_mmu_get_page(vcpu, i << (30 - PAGE_SHIFT),
-					i << 30, PT32_ROOT_LEVEL, 1, ACC_ALL);
+					i << 30, PT32_ROOT_LEVEL, 1, ACC_ALL, 0);
 			root = __pa(sp->spt);
 			++sp->root_count;
 			spin_unlock(&vcpu->kvm->mmu_lock);
@@ -3166,7 +3188,7 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 		spin_lock(&vcpu->kvm->mmu_lock);
 		make_mmu_pages_available(vcpu);
 		sp = kvm_mmu_get_page(vcpu, root_gfn, 0, PT64_ROOT_LEVEL,
-				      0, ACC_ALL);
+				      0, ACC_ALL,0);
 		root = __pa(sp->spt);
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
@@ -3200,7 +3222,7 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 		spin_lock(&vcpu->kvm->mmu_lock);
 		make_mmu_pages_available(vcpu);
 		sp = kvm_mmu_get_page(vcpu, root_gfn, i << 30, PT32_ROOT_LEVEL,
-				      0, ACC_ALL);
+				      0, ACC_ALL, 0);
 		root = __pa(sp->spt);
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
@@ -3237,10 +3259,10 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 	return 0;
 }
 
-static int mmu_alloc_roots(struct kvm_vcpu *vcpu)
+static int mmu_alloc_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
 {
 	if (vcpu->arch.mmu.direct_map)
-		return mmu_alloc_direct_roots(vcpu);
+		return mmu_alloc_direct_roots(vcpu, ept_index);
 	else
 		return mmu_alloc_shadow_roots(vcpu);
 }
@@ -3337,13 +3359,15 @@ walk_shadow_page_get_mmio_spte(struct kvm_vcpu *vcpu, u64 addr, u64 *sptep)
 	u64 sptes[PT64_ROOT_LEVEL], spte = 0ull;
 	int root, leaf;
 	bool reserved = false;
+	unsigned ept_index;
+	ept_index = vmx_get_current_ept_index(vcpu);
 
 	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		goto exit;
 
 	walk_shadow_page_lockless_begin(vcpu);
 
-	for (shadow_walk_init(&iterator, vcpu, addr),
+	for (shadow_walk_init(&iterator, vcpu, addr,ept_index),
 		 leaf = root = iterator.level;
 	     shadow_walk_okay(&iterator);
 	     __shadow_walk_next(&iterator, spte)) {
@@ -3434,12 +3458,14 @@ static void shadow_page_table_clear_flood(struct kvm_vcpu *vcpu, gva_t addr)
 {
 	struct kvm_shadow_walk_iterator iterator;
 	u64 spte;
+	unsigned ept_index;
+	ept_index = vmx_get_current_ept_index(vcpu);
 
 	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		return;
 
 	walk_shadow_page_lockless_begin(vcpu);
-	for_each_shadow_entry_lockless(vcpu, addr, iterator, spte) {
+	for_each_shadow_entry_lockless(vcpu, addr, iterator, spte,ept_index) {
 		clear_sp_write_flooding_count(iterator.sptep);
 		if (!is_shadow_present_pte(spte))
 			break;
@@ -4236,16 +4262,18 @@ EXPORT_SYMBOL_GPL(kvm_mmu_reset_context);
 int kvm_mmu_load(struct kvm_vcpu *vcpu)
 {
 	int r;
-
+	unsigned ept_index;
+	ept_index = vmx_get_current_ept_index(vcpu);
 	r = mmu_topup_memory_caches(vcpu);
 	if (r)
 		goto out;
-	r = mmu_alloc_roots(vcpu);
+	r = mmu_alloc_roots(vcpu, ept_index);
 	kvm_mmu_sync_roots(vcpu);
 	if (r)
 		goto out;
 	/* set_cr3() should ensure TLB has been flushed */
-	vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.root_hpa);
+	//vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.root_hpa);
+	vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
 out:
 	return r;
 }
