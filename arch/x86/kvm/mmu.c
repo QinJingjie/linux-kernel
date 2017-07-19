@@ -179,7 +179,7 @@ static u64 __read_mostly shadow_mmio_mask;
 static u64 __read_mostly shadow_present_mask;
 
 static void mmu_spte_set(u64 *sptep, u64 spte);
-static void mmu_free_roots(struct kvm_vcpu *vcpu);
+static void mmu_free_roots(struct kvm_vcpu *vcpu, unsigned ept_index);
 
 void kvm_mmu_set_mmio_spte_mask(u64 mmio_mask)
 {
@@ -2133,6 +2133,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	bool need_sync = false;
 	bool flush = false;
 	LIST_HEAD(invalid_list);
+	printk(KERN_ERR "current ept index: %u",ept_index);
 
 	role = vcpu->arch.mmu.base_role;
 	role.level = level;
@@ -2169,12 +2170,14 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 
 		__clear_sp_write_flooding_count(sp);
 		trace_kvm_mmu_get_page(sp, false);
+		printk(KERN_ERR "find mmu page %016llx from hash",sp->spt );
 		return sp;
 	}
 
 	++vcpu->kvm->stat.mmu_cache_miss;
 
 	sp = kvm_mmu_alloc_page(vcpu, direct);
+	printk(KERN_ERR "alloc new mmu page %016llx",sp->spt );
 
 	sp->gfn = gfn;
 	sp->role = role;
@@ -2761,7 +2764,9 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 	gfn_t pseudo_gfn;
 	unsigned ept_index;
 	ept_index = vmx_get_current_ept_index(vcpu);
+	printk(KERN_ERR "__direct_map, root_hpa: %016llx",vcpu->arch.mmu.ept_root_hpa_list[ept_index] );
 
+//	if (!VALID_PAGE(vcpu->arch.mmu.ept_root_hpa_list[ept_index]))
 	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		return 0;
 
@@ -2772,15 +2777,17 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 					       map_writable);
 			direct_pte_prefetch(vcpu, iterator.sptep);
 			++vcpu->stat.pf_fixed;
+			printk(KERN_ERR "for_each_shadow_entry  mmu_set_spte \n");	
 			break;
 		}
 
-		drop_large_spte(vcpu, iterator.sptep);
+		drop_large_spte(vcpu, iterator.sptep); 
 		if (!is_shadow_present_pte(*iterator.sptep)) {
 			u64 base_addr = iterator.addr;
 
 			base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
 			pseudo_gfn = base_addr >> PAGE_SHIFT;
+			printk(KERN_ERR "for_each_shadow_entry  kvm_mmu_get_page \n");	
 			sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
 					      iterator.level - 1, 1, ACC_ALL, ept_index);
 
@@ -3073,19 +3080,21 @@ out_unlock:
 }
 
 
-static void mmu_free_roots(struct kvm_vcpu *vcpu)
+static void mmu_free_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
 {
 	int i;
 	struct kvm_mmu_page *sp;
 	LIST_HEAD(invalid_list);
 
-	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
+//	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
+	if (!VALID_PAGE(vcpu->arch.mmu.ept_root_hpa_list[ept_index]))
 		return;
 
 	if (vcpu->arch.mmu.shadow_root_level == PT64_ROOT_LEVEL &&
 	    (vcpu->arch.mmu.root_level == PT64_ROOT_LEVEL ||
 	     vcpu->arch.mmu.direct_map)) {
-		hpa_t root = vcpu->arch.mmu.root_hpa;
+	//	hpa_t root = vcpu->arch.mmu.root_hpa;
+		hpa_t root = vcpu->arch.mmu.ept_root_hpa_list[ept_index];
 
 		spin_lock(&vcpu->kvm->mmu_lock);
 		sp = page_header(root);
@@ -3095,7 +3104,9 @@ static void mmu_free_roots(struct kvm_vcpu *vcpu)
 			kvm_mmu_commit_zap_page(vcpu->kvm, &invalid_list);
 		}
 		spin_unlock(&vcpu->kvm->mmu_lock);
-		vcpu->arch.mmu.root_hpa = INVALID_PAGE;
+	//	vcpu->arch.mmu.root_hpa = INVALID_PAGE;
+		vcpu->arch.mmu.ept_root_hpa_list[ept_index] = INVALID_PAGE;
+	
 		return;
 	}
 
@@ -3115,7 +3126,9 @@ static void mmu_free_roots(struct kvm_vcpu *vcpu)
 	}
 	kvm_mmu_commit_zap_page(vcpu->kvm, &invalid_list);
 	spin_unlock(&vcpu->kvm->mmu_lock);
-	vcpu->arch.mmu.root_hpa = INVALID_PAGE;
+//	vcpu->arch.mmu.root_hpa = INVALID_PAGE;
+	vcpu->arch.mmu.ept_root_hpa_list[ept_index] = INVALID_PAGE;
+
 }
 
 static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
@@ -3136,6 +3149,7 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
 	unsigned i;
 
 	if (vcpu->arch.mmu.shadow_root_level == PT64_ROOT_LEVEL) {
+		printk(KERN_ERR "mmu_alloc_direct_roots");
 		spin_lock(&vcpu->kvm->mmu_lock);
 		make_mmu_pages_available(vcpu);
 		sp = kvm_mmu_get_page(vcpu, 0, 0, PT64_ROOT_LEVEL, 1, ACC_ALL, ept_index);
@@ -3143,6 +3157,7 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		vcpu->arch.mmu.root_hpa = __pa(sp->spt);
 		vcpu->arch.mmu.ept_root_hpa_list[ept_index] = __pa(sp->spt);
+		printk(KERN_ERR "mmu_alloc_direct_roots set root hpa: %016llx \n", vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
 	} else if (vcpu->arch.mmu.shadow_root_level == PT32E_ROOT_LEVEL) {
 		for (i = 0; i < 4; ++i) {
 			hpa_t root = vcpu->arch.mmu.pae_root[i];
@@ -3564,7 +3579,8 @@ static int tdp_page_fault(struct kvm_vcpu *vcpu, gva_t gpa, u32 error_code,
 	int write = error_code & PFERR_WRITE_MASK;
 	bool map_writable;
 
-	MMU_WARN_ON(!VALID_PAGE(vcpu->arch.mmu.root_hpa));
+//	MMU_WARN_ON(!VALID_PAGE(vcpu->arch.mmu.root_hpa));
+	MMU_WARN_ON(!VALID_PAGE(vcpu->arch.mmu.ept_root_hpa_list[0]));
 
 	if (page_fault_handle_page_track(vcpu, error_code, gfn))
 		return 1;
@@ -3629,7 +3645,10 @@ static void nonpaging_init_context(struct kvm_vcpu *vcpu,
 
 void kvm_mmu_new_cr3(struct kvm_vcpu *vcpu)
 {
-	mmu_free_roots(vcpu);
+	unsigned ept_index;
+	ept_index = vmx_get_current_ept_index(vcpu);
+
+	mmu_free_roots(vcpu, ept_index);
 }
 
 static unsigned long get_cr3(struct kvm_vcpu *vcpu)
@@ -4273,6 +4292,7 @@ int kvm_mmu_load(struct kvm_vcpu *vcpu)
 		goto out;
 	/* set_cr3() should ensure TLB has been flushed */
 	//vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.root_hpa);
+	printk(KERN_ERR "set cr3 : %016lx \n",vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
 	vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
 out:
 	return r;
@@ -4281,8 +4301,12 @@ EXPORT_SYMBOL_GPL(kvm_mmu_load);
 
 void kvm_mmu_unload(struct kvm_vcpu *vcpu)
 {
-	mmu_free_roots(vcpu);
-	WARN_ON(VALID_PAGE(vcpu->arch.mmu.root_hpa));
+	printk(KERN_ERR "kvm_mmu_unload\n");
+	unsigned ept_index;
+	ept_index = vmx_get_current_ept_index(vcpu);
+
+	mmu_free_roots(vcpu, ept_index);
+	WARN_ON(VALID_PAGE(vcpu->arch.mmu.ept_root_hpa_list[ept_index]));
 }
 EXPORT_SYMBOL_GPL(kvm_mmu_unload);
 
