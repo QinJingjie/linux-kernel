@@ -2794,7 +2794,7 @@ static int nested_svm_vmexit(struct vcpu_svm *svm)
 
 	nested_svm_uninit_mmu_context(&svm->vcpu);
 	kvm_mmu_reset_context(&svm->vcpu);
-	kvm_mmu_load(&svm->vcpu);
+	kvm_mmu_load(&svm->vcpu, 0);
 
 	return 0;
 }

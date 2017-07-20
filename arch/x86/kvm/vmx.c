@@ -110,7 +110,7 @@ static u64 __read_mostly host_xss;
 static bool __read_mostly enable_pml = 1;
 module_param_named(pml, enable_pml, bool, S_IRUGO);
 
-static bool __read_mostly enable_eptp_switching = 1;
+static bool __read_mostly  enable_eptp_switching = 1;
 
 
 #define KVM_VMX_TSC_MULTIPLIER_MAX     0xffffffffffffffffULL
@@ -1164,6 +1164,7 @@ static u32 vmx_preemption_cpu_tfms[] = {
  /* 320836.pdf - AAJ124 - D0 - i7-900 Extreme and i7-900 Desktop */
 0x000106A5,
 };
+
 
 static inline bool cpu_has_broken_vmx_preemption_timer(void)
 {
@@ -4285,11 +4286,16 @@ static void vmx_set_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
 {
 	unsigned long guest_cr3;
 	u64 eptp;
-
+	unsigned ept_index = vcpu->arch.mmu.current_ept_index;
+//	ept_index = vmx_get_current_ept_index(vcpu);
 	guest_cr3 = cr3;
 	if (enable_ept) {
 		eptp = construct_eptp(cr3);
+		vcpu->arch.mmu.eptp = eptp;
+		vcpu->arch.mmu.eptp_list[ept_index] = eptp;
+		//vcpu->arch.mmu.eptp_list[1] = eptp;
 		vmcs_write64(EPT_POINTER, eptp);
+	
 		printk(KERN_ERR "kvm: ept =  %016llx \n",eptp);
 		if (is_paging(vcpu) || is_guest_mode(vcpu))
 			guest_cr3 = kvm_read_cr3(vcpu);
@@ -5377,6 +5383,9 @@ static int vmx_vcpu_setup(struct vcpu_vmx *vmx)
 		ASSERT(vmx->pml_pg);
 		vmcs_write64(PML_ADDRESS, page_to_phys(vmx->pml_pg));
 		vmcs_write16(GUEST_PML_INDEX, PML_ENTITY_NUM - 1);
+	}
+	if(enable_eptp_switching) {
+		vmcs_write64(EPTP_LIST_ADDRESS, __pa(vmx->vcpu.arch.mmu.eptp_list));
 	}
 
 	return 0;
@@ -6672,7 +6681,7 @@ static __init int hardware_setup(void)
 
 	if (enable_ept && !cpu_has_vmx_ept_2m_page())
 		kvm_disable_largepages();
-
+	
 	if (!cpu_has_vmx_ple())
 		ple_gap = 0;
 
@@ -6743,8 +6752,9 @@ static __init int hardware_setup(void)
 	if (!enable_ept || !enable_ept_ad_bits || !cpu_has_vmx_pml())
 		enable_pml = 0;
 
-	if (!enable_ept || !cpu_has_vmx_vm_functions() || !cpu_has_vmx_eptp_switching())
-		enable_eptp_switching = 0;
+//	if (!enable_ept ||!cpu_has_vmx_vm_functions() || !cpu_has_vmx_eptp_switching())
+//		enable_eptp_switching = 0;
+	
 	if (!enable_pml) {
 		kvm_x86_ops->slot_enable_log_dirty = NULL;
 		kvm_x86_ops->slot_disable_log_dirty = NULL;
@@ -7834,7 +7844,7 @@ static int handle_invept(struct kvm_vcpu *vcpu)
 	 * single context requests appropriately
 	 */
 	case VMX_EPT_EXTENT_CONTEXT:
-		kvm_mmu_sync_roots(vcpu);
+		kvm_mmu_sync_roots(vcpu, vcpu->arch.mmu.current_ept_index);
 		kvm_make_request(KVM_REQ_TLB_FLUSH, vcpu);
 		nested_vmx_succeed(vcpu);
 		break;
@@ -8539,6 +8549,7 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 	u32 exit_reason = vmx->exit_reason;
 	u32 vectoring_info = vmx->idt_vectoring_info;
+//	printk(KERN_ERR "exit reason: %u ", exit_reason);
 
 	trace_kvm_exit(exit_reason, vcpu, KVM_ISA_VMX);
 
@@ -9268,9 +9279,10 @@ static void vmx_free_vcpu(struct kvm_vcpu *vcpu)
 static int init_kvm_tdp_ept_list(struct kvm_vcpu *vcpu){
 	u64 *eptp_list;
 	hpa_t *ept_root_hpa_list;
-	struct page *eptp_list_pg;
 	int i;
-	eptp_list = kmalloc(sizeof(unsigned long) * EPTP_LIST_ENTRIES, GFP_KERNEL);
+	printk(KERN_ERR "pre ept\n");
+	eptp_list = phys_to_virt(page_to_phys(alloc_page(GFP_KERNEL | __GFP_ZERO)));
+	//eptp_list = kmalloc(sizeof(unsigned long) * EPTP_LIST_ENTRIES, GFP_KERNEL);
 	if(!eptp_list){
 		printk(KERN_ERR "kvm: malloc eptp_list failed!\n");
 		return -ENOMEM;
@@ -9285,11 +9297,6 @@ static int init_kvm_tdp_ept_list(struct kvm_vcpu *vcpu){
 	vcpu->arch.mmu.eptp_list = eptp_list;
 	vcpu->arch.mmu.ept_root_hpa_list = ept_root_hpa_list;
 	vcpu->arch.mmu.num_epts = 5;
-	//eptp_list_pg = alloc_page(GFP_KERNEL | __GFP_ZERO);
-	//if(!eptp_list_pg)
-	//	return -ENOMEM;
-	//printk(KERN_ERR "kvm: alloc page finish \n");
-	//vcpu->arch.mmu.ept_root_hpa_list = page_to_phys(eptp_list_pg);
 	printk(KERN_ERR "kvm: init ept_root_hpa_list \n");
 	for(i=0;i<vcpu->arch.mmu.num_epts;i++){
 		vcpu->arch.mmu.ept_root_hpa_list[i] = INVALID_PAGE;
@@ -9298,10 +9305,15 @@ static int init_kvm_tdp_ept_list(struct kvm_vcpu *vcpu){
           // 		kfree(ept_root_hpa_list);
           //  		return -ENOMEM;
 	//	}
-		vcpu->arch.mmu.eptp_list[i] = construct_eptp(vcpu->arch.mmu.ept_root_hpa_list[i]);
+	//	vcpu->arch.mmu.eptp_list[i] = construct_eptp(vcpu->arch.mmu.ept_root_hpa_list[i]);
 	}
 	vcpu->arch.mmu.eptp = vcpu->arch.mmu.eptp_list[0];
-	printk(KERN_ERR "kvm: init ept return 0 \n");
+//	vcpu->arch.mmu.current_ept_index = 0;
+//	vcpu->arch.mmu.shadow_root_level = kvm_x86_ops->get_tdp_level();
+	printk(KERN_ERR "kvm: init ept : %016llx \n", vcpu->arch.mmu.eptp);
+//	mmu_alloc_eptp_list_roots(vcpu);
+	printk(KERN_ERR "eptp list 0: %016llx \n", vcpu->arch.mmu.ept_root_hpa_list[0]);
+	printk(KERN_ERR "eptp list 1: %016llx \n", vcpu->arch.mmu.ept_root_hpa_list[1]);
 	return 0;
 }
 
@@ -9312,6 +9324,7 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 	struct vcpu_vmx *vmx = kmem_cache_zalloc(kvm_vcpu_cache, GFP_KERNEL);
 	int cpu;
 	u64 vm_function_control;
+	printk(KERN_ERR "enable_eptp_switching = %d", enable_eptp_switching);
 
 	if (!vmx)
 		return ERR_PTR(-ENOMEM);
@@ -9334,6 +9347,27 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 		vmx->pml_pg = alloc_page(GFP_KERNEL | __GFP_ZERO);
 		if (!vmx->pml_pg)
 			goto uninit_vcpu;
+	}
+	if (enable_ept) {
+		if (!kvm->arch.ept_identity_map_addr)
+			kvm->arch.ept_identity_map_addr =
+				VMX_EPT_IDENTITY_PAGETABLE_ADDR;
+		err = init_rmode_identity_map(kvm);
+		if (err)
+			goto free_vmcs;
+		if(enable_eptp_switching)
+		{
+			vm_function_control = vmcs_read64(VM_FUNCTION_CTRL);
+			vm_function_control |= VM_FUNCTION_EPTP_SWITCHING;
+			printk(KERN_ERR "111");
+			vmcs_write64(VM_FUNCTION_CTRL, vm_function_control);
+			printk(KERN_ERR "init_kvm_tdp_ept_list  \n");
+			err = init_kvm_tdp_ept_list(&vmx->vcpu);
+			if(err){
+				printk(KERN_ERR "kvm: int ept failed: %d \n", err);
+				goto free_pml;
+			}
+		}
 	}
 
 	vmx->guest_msrs = kmalloc(PAGE_SIZE, GFP_KERNEL);
@@ -9368,30 +9402,13 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 			goto free_vmcs;
 	}
 
-	if (enable_ept) {
-		if (!kvm->arch.ept_identity_map_addr)
-			kvm->arch.ept_identity_map_addr =
-				VMX_EPT_IDENTITY_PAGETABLE_ADDR;
-		err = init_rmode_identity_map(kvm);
-		if (err)
-			goto free_vmcs;
-		if(enable_eptp_switching)
-		{
-			vm_function_control = vmcs_read64(VM_FUNCTION_CTRL);
-			vm_function_control |= VM_FUNCTION_EPTP_SWITCHING;
-			vmcs_write64(VM_FUNCTION_CTRL, vm_function_control);
-			err = init_kvm_tdp_ept_list(&vmx->vcpu);
-			if(err){
-				printk(KERN_ERR "kvm: int ept failed: %d \n", err);
-				goto free_pml;
-			}
-		}
-	}
-
 	if (nested) {
 		nested_vmx_setup_ctls_msrs(vmx);
 		vmx->nested.vpid02 = allocate_vpid();
 	}
+	vm_function_control = vmcs_read64(VM_FUNCTION_CTRL);
+	vm_function_control |= VM_FUNCTION_EPTP_SWITCHING;
+	vmcs_write64(VM_FUNCTION_CTRL, vm_function_control);
 
 	vmx->nested.posted_intr_nv = -1;
 	vmx->nested.current_vmptr = -1ull;

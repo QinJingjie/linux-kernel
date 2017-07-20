@@ -87,14 +87,19 @@ static inline unsigned int kvm_mmu_available_pages(struct kvm *kvm)
 
 static inline int kvm_mmu_reload(struct kvm_vcpu *vcpu)
 {
-	
-//	if (likely(vcpu->arch.mmu.root_hpa != INVALID_PAGE))
-//	printk(KERN_ERR "kvm_mmu_reload\n");
-
-	if (likely(vcpu->arch.mmu.ept_root_hpa_list[0] != INVALID_PAGE))
-		return 0;
-	printk(KERN_ERR "mmu_reload root_hpa =  %016lx INVALID:",vcpu->arch.mmu.ept_root_hpa_list[0]  );
-	return kvm_mmu_load(vcpu);
+	unsigned ept_index;
+	unsigned j;
+	ept_index = vmx_get_current_ept_index(vcpu);
+	if (likely(vcpu->arch.mmu.ept_root_hpa_list[ept_index] != INVALID_PAGE)){
+		return  0;
+	}
+	for(j=vcpu->arch.mmu.num_epts-1;j>=0;j--){
+		vcpu->arch.mmu.current_ept_index = j;
+		printk(KERN_ERR "mmu_reload root_hpa =  %016lx INVALID:",vcpu->arch.mmu.ept_root_hpa_list[j]  );
+		//mmu_alloc_eptp_list_roots(vcpu);
+		 kvm_mmu_load(vcpu, j);
+	}
+	return 0;
 }
 
 /*

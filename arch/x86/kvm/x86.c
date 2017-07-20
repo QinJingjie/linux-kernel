@@ -801,7 +801,7 @@ int kvm_set_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
 #endif
 
 	if (cr3 == kvm_read_cr3(vcpu) && !pdptrs_changed(vcpu)) {
-		kvm_mmu_sync_roots(vcpu);
+		kvm_mmu_sync_roots(vcpu, vcpu->arch.mmu.current_ept_index);
 		kvm_make_request(KVM_REQ_TLB_FLUSH, vcpu);
 		return 0;
 	}
@@ -6643,7 +6643,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 				goto out;
 		}
 		if (kvm_check_request(KVM_REQ_MMU_SYNC, vcpu))
-			kvm_mmu_sync_roots(vcpu);
+			kvm_mmu_sync_roots(vcpu, vcpu->arch.mmu.current_ept_index);
 		if (kvm_check_request(KVM_REQ_TLB_FLUSH, vcpu))
 			kvm_vcpu_flush_tlb(vcpu);
 		if (kvm_check_request(KVM_REQ_REPORT_TPR_ACCESS, vcpu)) {

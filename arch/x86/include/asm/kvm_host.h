@@ -339,6 +339,7 @@ struct kvm_mmu {
 	hpa_t root_hpa;
 	hpa_t *ept_root_hpa_list;
 	u64 *eptp_list;
+	unsigned current_ept_index;
 	u64 eptp;
 	unsigned num_epts;
 	int root_level;
@@ -1193,6 +1194,9 @@ static inline int __kvm_irq_line_state(unsigned long *irq_state,
 
 	return !!(*irq_state);
 }
+inline unsigned eptp_to_ept_index(struct kvm_vcpu *vcpu, unsigned long eptp);
+inline unsigned vmx_get_current_ept_index(struct kvm_vcpu *vcpu);
+int mmu_alloc_eptp_list_roots(struct kvm_vcpu *vcpu);
 
 int kvm_pic_set_irq(struct kvm_pic *pic, int irq, int irq_source_id, int level);
 void kvm_pic_clear_all(struct kvm_pic *pic, int irq_source_id);
@@ -1202,9 +1206,9 @@ void kvm_inject_nmi(struct kvm_vcpu *vcpu);
 int kvm_mmu_unprotect_page(struct kvm *kvm, gfn_t gfn);
 int kvm_mmu_unprotect_page_virt(struct kvm_vcpu *vcpu, gva_t gva);
 void __kvm_mmu_free_some_pages(struct kvm_vcpu *vcpu);
-int kvm_mmu_load(struct kvm_vcpu *vcpu);
+int kvm_mmu_load(struct kvm_vcpu *vcpu, unsigned ept_index);
 void kvm_mmu_unload(struct kvm_vcpu *vcpu);
-void kvm_mmu_sync_roots(struct kvm_vcpu *vcpu);
+void kvm_mmu_sync_roots(struct kvm_vcpu *vcpu, unsigned ept_index);
 gpa_t translate_nested_gpa(struct kvm_vcpu *vcpu, gpa_t gpa, u32 access,
 			   struct x86_exception *exception);
 gpa_t kvm_mmu_gva_to_gpa_read(struct kvm_vcpu *vcpu, gva_t gva,

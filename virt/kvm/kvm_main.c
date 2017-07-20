@@ -2731,10 +2731,9 @@ static long kvm_vcpu_compat_ioctl(struct file *filp,
 	struct kvm_vcpu *vcpu = filp->private_data;
 	void __user *argp = compat_ptr(arg);
 	int r;
-
 	if (vcpu->kvm->mm != current->mm)
 		return -EIO;
-
+	
 	switch (ioctl) {
 	case KVM_SET_SIGNAL_MASK: {
 		struct kvm_signal_mask __user *sigmask_arg = argp;
@@ -2763,7 +2762,6 @@ static long kvm_vcpu_compat_ioctl(struct file *filp,
 	default:
 		r = kvm_vcpu_ioctl(filp, ioctl, arg);
 	}
-
 out:
 	return r;
 }
