@@ -91,15 +91,27 @@ static inline int kvm_mmu_reload(struct kvm_vcpu *vcpu)
 	unsigned j;
 	ept_index = vmx_get_current_ept_index(vcpu);
 	if (likely(vcpu->arch.mmu.ept_root_hpa_list[ept_index] != INVALID_PAGE)){
-		return  0;
-	}
-	for(j=vcpu->arch.mmu.num_epts-1;j>=0;j--){
+			return  0;
+	} 
+//	for(j=vcpu->arch.mmu.num_epts-1;j>=0;j--){
+	for (j=vcpu->arch.mmu.num_epts-1;j>0;j--)
+		{
+			if (likely(vcpu->arch.mmu.ept_root_hpa_list[j] != INVALID_PAGE)){
+			continue ;
+			}
 		vcpu->arch.mmu.current_ept_index = j;
-		printk(KERN_ERR "mmu_reload root_hpa =  %016lx INVALID:",vcpu->arch.mmu.ept_root_hpa_list[j]  );
+		kvm_mmu_load_rest(vcpu,j);
+		}
+		if (likely(vcpu->arch.mmu.ept_root_hpa_list[0] != INVALID_PAGE)){
+			return 0; 
+		} 
+//		vcpu->arch.mmu.current_ept_index = j;
+//		printk(KERN_ERR "mmu_reload root_hpa =  %016llx INVALID:",vcpu->arch.mmu.ept_root_hpa_list[j]  );
 		//mmu_alloc_eptp_list_roots(vcpu);
-		 kvm_mmu_load(vcpu, j);
-	}
-	return 0;
+		vcpu->arch.mmu.current_ept_index = 0;
+		return  kvm_mmu_load(vcpu, 0);
+//	}
+
 }
 
 /*

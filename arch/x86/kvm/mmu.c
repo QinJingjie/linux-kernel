@@ -52,6 +52,7 @@
  * If the hardware supports that we don't need to do shadow paging.
  */
 bool tdp_enabled = false;
+bool eptp_switching_first = false;
 
 enum {
 	AUDIT_PRE_PAGE_FAULT,
@@ -3150,7 +3151,6 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
 {
 	struct kvm_mmu_page *sp;
 	unsigned i;
-	unsigned j;
 	if (vcpu->arch.mmu.shadow_root_level == PT64_ROOT_LEVEL) {
 			printk(KERN_ERR "mmu_alloc_direct_roots");
 			spin_lock(&vcpu->kvm->mmu_lock);
@@ -3286,7 +3286,7 @@ static int mmu_alloc_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
 		return mmu_alloc_shadow_roots(vcpu);
 }
 
-static void mmu_sync_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
+static void mmu_sync_roots(struct kvm_vcpu *vcpu)//, unsigned ept_index)
 {
 	int i;
 	struct kvm_mmu_page *sp;
@@ -3300,8 +3300,8 @@ static void mmu_sync_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
 	vcpu_clear_mmio_info(vcpu, MMIO_GVA_ANY);
 	kvm_mmu_audit(vcpu, AUDIT_PRE_SYNC);
 	if (vcpu->arch.mmu.root_level == PT64_ROOT_LEVEL) {
-	//	hpa_t root = vcpu->arch.mmu.root_hpa;
-		hpa_t root = vcpu->arch.mmu.ept_root_hpa_list[ept_index];
+		hpa_t root = vcpu->arch.mmu.root_hpa;
+	//	hpa_t root = vcpu->arch.mmu.ept_root_hpa_list[ept_index];
 		sp = page_header(root);
 		mmu_sync_children(vcpu, sp);
 		kvm_mmu_audit(vcpu, AUDIT_POST_SYNC);
@@ -3319,10 +3319,10 @@ static void mmu_sync_roots(struct kvm_vcpu *vcpu, unsigned ept_index)
 	kvm_mmu_audit(vcpu, AUDIT_POST_SYNC);
 }
 
-void kvm_mmu_sync_roots(struct kvm_vcpu *vcpu,unsigned ept_index)
+void kvm_mmu_sync_roots(struct kvm_vcpu *vcpu)
 {
 	spin_lock(&vcpu->kvm->mmu_lock);
-	mmu_sync_roots(vcpu, ept_index);
+	mmu_sync_roots(vcpu);
 	spin_unlock(&vcpu->kvm->mmu_lock);
 }
 EXPORT_SYMBOL_GPL(kvm_mmu_sync_roots);
@@ -3583,7 +3583,11 @@ static int tdp_page_fault(struct kvm_vcpu *vcpu, gva_t gpa, u32 error_code,
 	unsigned long mmu_seq;
 	int write = error_code & PFERR_WRITE_MASK;
 	bool map_writable;
-
+	//vcpu->eptp = vmcs_read64(EPT_POINTER);
+	//printk(KERN_ERR "handle:  %016llx\n", gfn );
+		//printk(KERN_ERR "handle\n");	printk(KERN_ERR "handle\n");	printk(KERN_ERR "handle\n");
+		
+		
 //	MMU_WARN_ON(!VALID_PAGE(vcpu->arch.mmu.root_hpa));
 	MMU_WARN_ON(!VALID_PAGE(vcpu->arch.mmu.ept_root_hpa_list[0]));
 
@@ -4283,6 +4287,21 @@ void kvm_mmu_reset_context(struct kvm_vcpu *vcpu)
 }
 EXPORT_SYMBOL_GPL(kvm_mmu_reset_context);
 
+int kvm_mmu_load_rest(struct kvm_vcpu *vcpu, unsigned ept_index)
+{
+	int r;
+	r = mmu_topup_memory_caches(vcpu);
+	if (r)
+		goto out;
+	r = mmu_alloc_roots(vcpu, ept_index);
+	vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
+	
+out:
+	return r;
+}
+EXPORT_SYMBOL_GPL(kvm_mmu_load_rest);
+
+
 int kvm_mmu_load(struct kvm_vcpu *vcpu, unsigned ept_index)
 {
 	int r;
@@ -4292,14 +4311,14 @@ int kvm_mmu_load(struct kvm_vcpu *vcpu, unsigned ept_index)
 	if (r)
 		goto out;
 	r = mmu_alloc_roots(vcpu, ept_index);
-	kvm_mmu_sync_roots(vcpu, ept_index);
+	kvm_mmu_sync_roots(vcpu);//, ept_index);
 	if (r)
 		goto out;
 	/* set_cr3() should ensure TLB has been flushed */
 	//vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.root_hpa);
 	printk(KERN_ERR "current ept : %u \n", ept_index);
 	
-	printk(KERN_ERR "set cr3 : %016lx \n",vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
+	printk(KERN_ERR "set cr3 : %016llx \n",vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
 	vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
 out:
 	return r;
@@ -4330,6 +4349,8 @@ EXPORT_SYMBOL_GPL(mmu_alloc_eptp_list_roots);
 
 void kvm_mmu_unload(struct kvm_vcpu *vcpu)
 {
+	printk(KERN_ERR "kvm_mmu_unload");
+
 	unsigned ept_index;
 	ept_index = vmx_get_current_ept_index(vcpu);
 	printk(KERN_ERR "kvm_mmu_unload current ept index:%u \n",ept_index);
@@ -4588,7 +4609,12 @@ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
 	int r, emulation_type = EMULTYPE_RETRY;
 	enum emulation_result er;
 	bool direct = vcpu->arch.mmu.direct_map || mmu_is_nested(vcpu);
-
+	unsigned eptp_index = vmx_get_current_ept_index(vcpu);
+	if (eptp_index == 1 && !eptp_switching_first){
+		printk(KERN_ERR "first time eptp = 1  \n");
+		memcpy (__va(vcpu->arch.mmu.ept_root_hpa_list[1]),__va(vcpu->arch.mmu.ept_root_hpa_list[0]),4096);
+		eptp_switching_first = true;
+	}
 	if (unlikely(error_code & PFERR_RSVD_MASK)) {
 		r = handle_mmio_page_fault(vcpu, cr2, direct);
 		if (r == RET_MMIO_PF_EMULATE) {

@@ -3121,19 +3121,6 @@ struct compat_kvm_dirty_log {
 		__u64 padding2;
 	};
 };
-//extern u8  vcpu_vmfunc(u32 eptp, u32 func);
-
-int  kvm_vm_use_vmfunc(struct kvm *kvm)
-{
-	u8 error;
-//	if (kvm->active_vcpus == 0)
-//		return 0xC0351000;
-//	error = vcpu_vmfunc(0, 0);
-
-	printk(KERN_ERR "kvm: 1111start eptp-switching ,error is %d\n",error); 
-	
-	return error;
-}
 
 static long kvm_vm_compat_ioctl(struct file *filp,
 			   unsigned int ioctl, unsigned long arg)

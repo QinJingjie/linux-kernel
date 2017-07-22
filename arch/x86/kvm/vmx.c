@@ -4295,8 +4295,7 @@ static void vmx_set_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
 		vcpu->arch.mmu.eptp_list[ept_index] = eptp;
 		//vcpu->arch.mmu.eptp_list[1] = eptp;
 		vmcs_write64(EPT_POINTER, eptp);
-	
-		printk(KERN_ERR "kvm: ept =  %016llx \n",eptp);
+		printk(KERN_ERR "kvm: ept %u =  %016llx \n",ept_index, eptp);
 		if (is_paging(vcpu) || is_guest_mode(vcpu))
 			guest_cr3 = kvm_read_cr3(vcpu);
 		else
@@ -6378,9 +6377,10 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	gpa_t gpa;
 	u32 error_code;
 	int gla_validity;
-
+	u64 eptp;
 	exit_qualification = vmcs_readl(EXIT_QUALIFICATION);
-
+	eptp = vmcs_read64(EPT_POINTER);
+	vcpu->arch.mmu.eptp = eptp;
 	gla_validity = (exit_qualification >> 7) & 0x3;
 	if (gla_validity == 0x2) {
 		printk(KERN_ERR "EPT: Handling EPT violation failed!\n");
@@ -6418,7 +6418,7 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	error_code |= (exit_qualification & 0x38) != 0;
 
 	vcpu->arch.exit_qualification = exit_qualification;
-
+        // printk(KERN_ERR "eptp:=%016llx",vmcs_read64(EPT_POINTER));
 	return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 }
 
@@ -7844,7 +7844,7 @@ static int handle_invept(struct kvm_vcpu *vcpu)
 	 * single context requests appropriately
 	 */
 	case VMX_EPT_EXTENT_CONTEXT:
-		kvm_mmu_sync_roots(vcpu, vcpu->arch.mmu.current_ept_index);
+		kvm_mmu_sync_roots(vcpu);
 		kvm_make_request(KVM_REQ_TLB_FLUSH, vcpu);
 		nested_vmx_succeed(vcpu);
 		break;
