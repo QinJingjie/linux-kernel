@@ -1031,7 +1031,7 @@ static void pte_list_remove(u64 *spte, struct kvm_rmap_head *rmap_head)
 	struct pte_list_desc *prev_desc;
 	int i;
 
-	if (!rmap_head->val) {
+	if (!rmap_head->val) {		
 		printk(KERN_ERR "pte_list_remove: %p 0->BUG\n", spte);
 		BUG();
 	} else if (!(rmap_head->val & 1)) {
@@ -1075,7 +1075,7 @@ static struct kvm_rmap_head *gfn_to_rmap(struct kvm *kvm, gfn_t gfn,
 {
 	struct kvm_memslots *slots;
 	struct kvm_memory_slot *slot;
-
+	
 	slots = kvm_memslots_for_spte_role(kvm, sp->role);
 	slot = __gfn_to_memslot(slots, gfn);
 	return __gfn_to_rmap(gfn, sp->role.level, slot);
@@ -2304,7 +2304,6 @@ static bool mmu_page_zap_pte(struct kvm *kvm, struct kvm_mmu_page *sp,
 {
 	u64 pte;
 	struct kvm_mmu_page *child;
-
 	pte = *spte;
 	if (is_shadow_present_pte(pte)) {
 		if (is_last_spte(pte, sp->role.level)) {
@@ -4609,10 +4608,52 @@ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
 	int r, emulation_type = EMULTYPE_RETRY;
 	enum emulation_result er;
 	bool direct = vcpu->arch.mmu.direct_map || mmu_is_nested(vcpu);
-	unsigned eptp_index = vmx_get_current_ept_index(vcpu);
-	if (eptp_index == 1 && !eptp_switching_first){
+	unsigned ept_index = vmx_get_current_ept_index(vcpu);
+	gfn_t pseudo_gfn;
+	struct kvm_shadow_walk_iterator iterator;
+	struct kvm_shadow_walk_iterator iterator_temp;
+	gfn_t gfn = cr2 >> PAGE_SHIFT;
+	kvm_pfn_t pfn;
+	int emulate = 0;
+	struct kvm_mmu_page *sp;
+	int write = error_code & PFERR_WRITE_MASK;
+	bool map_writable;
+	if (ept_index == 1 && !eptp_switching_first){
+		if (try_async_pf(vcpu, false, gfn, cr2, &pfn, write, &map_writable))
+			return 0;
+
+		if (handle_abnormal_pfn(vcpu, 0, gfn, pfn, ACC_ALL, &r))
+			return r;
 		printk(KERN_ERR "first time eptp = 1  \n");
-		memcpy (__va(vcpu->arch.mmu.ept_root_hpa_list[1]),__va(vcpu->arch.mmu.ept_root_hpa_list[0]),4096);
+	//	memcpy (__va(vcpu->arch.mmu.ept_root_hpa_list[1]),__va(vcpu->arch.mmu.ept_root_hpa_list[0]),4096);
+              	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
+              		printk(KERN_ERR "level: %d  \n", iterator.level );
+			if (iterator.level == PT_PAGE_TABLE_LEVEL) {
+				for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator_temp,0) {
+					if (iterator_temp.level == PT_PAGE_TABLE_LEVEL) {
+						emulate = mmu_set_spte(vcpu, iterator_temp.sptep, ACC_ALL,
+					      	 write, iterator_temp.level, gfn, pfn, false,  	
+					       	map_writable);
+						 printk(KERN_ERR "mmu_set_spte ssss  \n");
+						direct_pte_prefetch(vcpu, iterator.sptep);
+						++vcpu->stat.pf_fixed;
+						break;
+					}
+				}
+			}
+			drop_large_spte(vcpu, iterator.sptep); 
+			if (!is_shadow_present_pte(*iterator.sptep)) {
+				u64 base_addr = iterator.addr;
+
+				base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
+				pseudo_gfn = base_addr >> PAGE_SHIFT;
+		
+				sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
+						     iterator.level - 1, 1, ACC_ALL, ept_index);
+				printk(KERN_ERR "kvm_mmu_get_page ssss  \n");
+				link_shadow_page(vcpu, iterator.sptep, sp);
+			}
+		}
 		eptp_switching_first = true;
 	}
 	if (unlikely(error_code & PFERR_RSVD_MASK)) {

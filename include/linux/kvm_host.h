@@ -213,7 +213,7 @@ struct kvm_mmio_fragment {
 #define EPT_ACCESS_RX			(EPT_ACCESS_READ | EPT_ACCESS_EXEC)
 #define EPT_ACCESS_RWX			(EPT_ACCESS_RW | EPT_ACCESS_EXEC)
 #define EPT_ACCESS_ALL			EPT_ACCESS_RWX
-
+#define EPT_SUPPRESS_VE_BIT	0x8000000000000000
 struct kvm_vcpu {
 	struct kvm *kvm;
 #ifdef CONFIG_PREEMPT_NOTIFIERS
@@ -374,6 +374,7 @@ static inline int kvm_arch_vcpu_memslots_id(struct kvm_vcpu *vcpu)
 struct kvm_memslots {
 	u64 generation;
 	struct kvm_memory_slot memslots[KVM_MEM_SLOTS_NUM];
+	struct kvm_memory_slot memslots_list[10][KVM_MEM_SLOTS_NUM];
 	/* The mapping table from slot id to the index in memslots[]. */
 	short id_to_index[KVM_MEM_SLOTS_NUM];
 	atomic_t lru_slot;

@@ -111,6 +111,7 @@ static bool __read_mostly enable_pml = 1;
 module_param_named(pml, enable_pml, bool, S_IRUGO);
 
 static bool __read_mostly  enable_eptp_switching = 1;
+static bool  __read_mostly enable_vmx_virt_exception =1;
 
 
 #define KVM_VMX_TSC_MULTIPLIER_MAX     0xffffffffffffffffULL
@@ -1342,6 +1343,12 @@ static inline bool cpu_has_vmx_eptp_switching(void)
 	/* This MSR has same format as VM-function controls */
 	return vmx_msr & VM_FUNCTION_EPTP_SWITCHING;
 }
+
+static inline bool cpu_has_vmx_virt_exceptions(void)
+{
+	return vmcs_config.cpu_based_2nd_exec_ctrl & SECONDARY_EXEC_ENABLE_VIRT_EXCEPTIONS;
+}
+
 
 static inline bool report_flexpriority(void)
 {
@@ -3618,6 +3625,7 @@ static __init int setup_vmcs_config(struct vmcs_config *vmcs_conf)
 	u32 _cpu_based_2nd_exec_control = 0;
 	u32 _vmexit_control = 0;
 	u32 _vmentry_control = 0;
+	u64 _vmx_vmfunc = 0;
 
 	min = CPU_BASED_HLT_EXITING |
 #ifdef CONFIG_X86_64
@@ -3657,23 +3665,25 @@ static __init int setup_vmcs_config(struct vmcs_config *vmcs_conf)
 			SECONDARY_EXEC_RDTSCP |
 			SECONDARY_EXEC_ENABLE_INVPCID |
 			SECONDARY_EXEC_ENABLE_VM_FUNCTIONS |
+			SECONDARY_EXEC_ENABLE_VIRT_EXCEPTIONS |
 			SECONDARY_EXEC_APIC_REGISTER_VIRT |
 			SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY |
 			SECONDARY_EXEC_SHADOW_VMCS |
 			SECONDARY_EXEC_XSAVES |
 			SECONDARY_EXEC_ENABLE_PML |
 			SECONDARY_EXEC_TSC_SCALING;
+		printk(KERN_ERR "kvm: opt2 : %llx \n", opt2);
 		if (adjust_vmx_controls(min2, opt2,
 					MSR_IA32_VMX_PROCBASED_CTLS2,
 					&_cpu_based_2nd_exec_control) < 0)
 			return -EIO;
+		printk(KERN_ERR "kvm333: _cpu_based_2nd_exec_control : %llx \n",_cpu_based_2nd_exec_control);
 	}
 #ifndef CONFIG_X86_64
 	if (!(_cpu_based_2nd_exec_control &
 				SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES))
 		_cpu_based_exec_control &= ~CPU_BASED_TPR_SHADOW;
 #endif
-
 	if (!(_cpu_based_exec_control & CPU_BASED_TPR_SHADOW))
 		_cpu_based_2nd_exec_control &= ~(
 				SECONDARY_EXEC_APIC_REGISTER_VIRT |
@@ -3725,6 +3735,25 @@ static __init int setup_vmcs_config(struct vmcs_config *vmcs_conf)
 	if ((vmx_msr_high & 0x1fff) > PAGE_SIZE)
 		return -EIO;
 
+	 if ( _cpu_based_2nd_exec_control & SECONDARY_EXEC_ENABLE_VM_FUNCTIONS )
+    	{
+        		rdmsrl(MSR_IA32_VMX_VMFUNC, _vmx_vmfunc);
+        		/*
+         * VMFUNC leaf 0 (EPTP switching) must be supported.
+         *
+         * Or we just don't use VMFUNC.
+         */
+        		if ( !(_vmx_vmfunc & VM_FUNCTION_EPTP_SWITCHING) ){
+            		_cpu_based_2nd_exec_control &= ~SECONDARY_EXEC_ENABLE_VM_FUNCTIONS;
+		}
+   	 }
+
+	 /* Virtualization exceptions are only enabled if VMFUNC is enabled */
+    	if ( !(_cpu_based_2nd_exec_control & SECONDARY_EXEC_ENABLE_VM_FUNCTIONS) ){
+		printk(KERN_ERR "kvm: _cpu_based_2nd_exec_control : %llx \n",_cpu_based_2nd_exec_control);
+       		 _cpu_based_2nd_exec_control &= ~SECONDARY_EXEC_ENABLE_VIRT_EXCEPTIONS;
+	 }
+	printk(KERN_ERR "11kvm: _cpu_based_2nd_exec_control : %llx \n",_cpu_based_2nd_exec_control);
 #ifdef CONFIG_X86_64
 	/* IA-32 SDM Vol 3B: 64-bit CPUs always have VMX_BASIC_MSR[48]==0. */
 	if (vmx_msr_high & (1u<<16))
@@ -6752,8 +6781,17 @@ static __init int hardware_setup(void)
 	if (!enable_ept || !enable_ept_ad_bits || !cpu_has_vmx_pml())
 		enable_pml = 0;
 
-//	if (!enable_ept ||!cpu_has_vmx_vm_functions() || !cpu_has_vmx_eptp_switching())
+//	if (!enable_ept ||!cpu_has_vmx_vm_functions() || !cpu_has_vmx_eptp_switching() || !cpu_has_vmx_virt_exceptions())
+//	{
 //		enable_eptp_switching = 0;
+//		enable_vmx_virt_exception = 0;
+//	}
+	if(cpu_has_vmx_vm_functions()){
+		printk(KERN_ERR "kvm: support VMFUNC!\n");
+	}
+	if(!cpu_has_vmx_virt_exceptions()){
+		printk(KERN_ERR "kvm: NO #VE!\n");
+	}
 	
 	if (!enable_pml) {
 		kvm_x86_ops->slot_enable_log_dirty = NULL;
@@ -9227,6 +9265,7 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
 	vmx_complete_atomic_exit(vmx);
 	vmx_recover_nmi_blocking(vmx);
 	vmx_complete_interrupts(vmx);
+	 
 }
 
 static void vmx_load_vmcs01(struct kvm_vcpu *vcpu)
@@ -9325,6 +9364,7 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 	int cpu;
 	u64 vm_function_control;
 	printk(KERN_ERR "enable_eptp_switching = %d", enable_eptp_switching);
+	printk(KERN_ERR "enable_virt_exception = %d", enable_vmx_virt_exception);
 
 	if (!vmx)
 		return ERR_PTR(-ENOMEM);
@@ -9355,7 +9395,7 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 		err = init_rmode_identity_map(kvm);
 		if (err)
 			goto free_vmcs;
-		if(enable_eptp_switching)
+		if(enable_eptp_switching && enable_vmx_virt_exception)
 		{
 			vm_function_control = vmcs_read64(VM_FUNCTION_CTRL);
 			vm_function_control |= VM_FUNCTION_EPTP_SWITCHING;

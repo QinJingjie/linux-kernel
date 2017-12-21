@@ -470,6 +470,17 @@ struct kvm_vcpu_hv {
 	DECLARE_BITMAP(stimer_pending_bitmap, HV_SYNIC_STIMER_COUNT);
 };
 
+/* #VE (EPT Violation via IDT exception informaiton)  */
+struct ve_except_info {
+	u32 reason;		/* EXIT_REASON_EPT_VIOLATION  */
+	u32 except_mask;	/* FFFFFFFF (set to 0 to deliver more)  */
+	u64 exit;		/* normal exit qualification bits, see above  */
+	u64 gla;		/* guest linear address */
+	u64 gpa;		/* guest physical address  */
+	u16 eptp;		/* current EPTP index  */
+};
+
+
 struct kvm_vcpu_arch {
 	/*
 	 * rip and regs accesses must go through
