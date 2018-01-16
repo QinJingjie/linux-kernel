@@ -4315,7 +4315,7 @@ static void vmx_set_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
 {
 	unsigned long guest_cr3;
 	u64 eptp;
-	unsigned ept_index = vcpu->arch.mmu.current_ept_index;
+	int ept_index = vcpu->arch.mmu.current_ept_index;
 //	ept_index = vmx_get_current_ept_index(vcpu);
 	guest_cr3 = cr3;
 	if (enable_ept) {
@@ -4324,6 +4324,7 @@ static void vmx_set_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
 		vcpu->arch.mmu.eptp_list[ept_index] = eptp;
 		//vcpu->arch.mmu.eptp_list[1] = eptp;
 		vmcs_write64(EPT_POINTER, eptp);
+		vmcs_write16(EPTP_INDEX, ept_index);
 		printk(KERN_ERR "kvm: ept %u =  %016llx \n",ept_index, eptp);
 		if (is_paging(vcpu) || is_guest_mode(vcpu))
 			guest_cr3 = kvm_read_cr3(vcpu);

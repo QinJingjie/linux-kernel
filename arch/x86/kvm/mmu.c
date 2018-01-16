@@ -526,12 +526,11 @@ inline unsigned vmx_get_current_ept_index(struct kvm_vcpu *vcpu)
 		}
     }
     vcpu->arch.mmu.current_ept_index = (unsigned)-1;
+    vcpu->kvm->current_ept_index = (unsigned)-1;
 
     return (unsigned)-1;
 }
 EXPORT_SYMBOL_GPL(vmx_get_current_ept_index);
-
-
 
 /* Rules for using mmu_spte_set:
  * Set the sptep from nonpresent to present.
@@ -1062,12 +1061,14 @@ static void pte_list_remove(u64 *spte, struct kvm_rmap_head *rmap_head)
 }
 
 static struct kvm_rmap_head *__gfn_to_rmap(gfn_t gfn, int level,
-					   struct kvm_memory_slot *slot)
+					   struct kvm_memory_slot *slot, unsigned ept_index)
 {
 	unsigned long idx;
-
 	idx = gfn_to_index(gfn, slot->base_gfn, level);
-	return &slot->arch.rmap[level - PT_PAGE_TABLE_LEVEL][idx];
+	
+//	return &slot->arch.rmap[level - PT_PAGE_TABLE_LEVEL][idx];
+	return &slot->arch.rmap_list[ept_index][level - PT_PAGE_TABLE_LEVEL][idx];
+
 }
 
 static struct kvm_rmap_head *gfn_to_rmap(struct kvm *kvm, gfn_t gfn,
@@ -1076,9 +1077,11 @@ static struct kvm_rmap_head *gfn_to_rmap(struct kvm *kvm, gfn_t gfn,
 	struct kvm_memslots *slots;
 	struct kvm_memory_slot *slot;
 	
+	unsigned ept_index;
+	ept_index = kvm->current_ept_index;
 	slots = kvm_memslots_for_spte_role(kvm, sp->role);
 	slot = __gfn_to_memslot(slots, gfn);
-	return __gfn_to_rmap(gfn, sp->role.level, slot);
+	return __gfn_to_rmap(gfn, sp->role.level, slot, ept_index);
 }
 
 static bool rmap_can_add(struct kvm_vcpu *vcpu)
@@ -1093,7 +1096,6 @@ static int rmap_add(struct kvm_vcpu *vcpu, u64 *spte, gfn_t gfn)
 {
 	struct kvm_mmu_page *sp;
 	struct kvm_rmap_head *rmap_head;
-
 	sp = page_header(__pa(spte));
 	kvm_mmu_page_set_gfn(sp, spte - sp->spt, gfn);
 	rmap_head = gfn_to_rmap(vcpu->kvm, gfn, sp);
@@ -1105,7 +1107,6 @@ static void rmap_remove(struct kvm *kvm, u64 *spte)
 	struct kvm_mmu_page *sp;
 	gfn_t gfn;
 	struct kvm_rmap_head *rmap_head;
-
 	sp = page_header(__pa(spte));
 	gfn = kvm_mmu_page_get_gfn(sp, spte - sp->spt);
 	rmap_head = gfn_to_rmap(kvm, gfn, sp);
@@ -1319,10 +1320,13 @@ static void kvm_mmu_write_protect_pt_masked(struct kvm *kvm,
 				     gfn_t gfn_offset, unsigned long mask)
 {
 	struct kvm_rmap_head *rmap_head;
+	unsigned ept_index;
+	ept_index = kvm->current_ept_index;
+
 
 	while (mask) {
 		rmap_head = __gfn_to_rmap(slot->base_gfn + gfn_offset + __ffs(mask),
-					  PT_PAGE_TABLE_LEVEL, slot);
+					  PT_PAGE_TABLE_LEVEL, slot, ept_index);
 		__rmap_write_protect(kvm, rmap_head, false);
 
 		/* clear the first set bit */
@@ -1344,10 +1348,13 @@ void kvm_mmu_clear_dirty_pt_masked(struct kvm *kvm,
 				     gfn_t gfn_offset, unsigned long mask)
 {
 	struct kvm_rmap_head *rmap_head;
+	unsigned ept_index;
+	ept_index = kvm->current_ept_index;
+
 
 	while (mask) {
 		rmap_head = __gfn_to_rmap(slot->base_gfn + gfn_offset + __ffs(mask),
-					  PT_PAGE_TABLE_LEVEL, slot);
+					  PT_PAGE_TABLE_LEVEL, slot, ept_index);
 		__rmap_clear_dirty(kvm, rmap_head);
 
 		/* clear the first set bit */
@@ -1383,9 +1390,12 @@ bool kvm_mmu_slot_gfn_write_protect(struct kvm *kvm,
 	struct kvm_rmap_head *rmap_head;
 	int i;
 	bool write_protected = false;
+	unsigned ept_index;
+	ept_index = kvm->current_ept_index;
+
 
 	for (i = PT_PAGE_TABLE_LEVEL; i <= PT_MAX_HUGEPAGE_LEVEL; ++i) {
-		rmap_head = __gfn_to_rmap(gfn, i, slot);
+		rmap_head = __gfn_to_rmap(gfn, i, slot, ept_index);
 		write_protected |= __rmap_write_protect(kvm, rmap_head, true);
 	}
 
@@ -1484,19 +1494,19 @@ struct slot_rmap_walk_iterator {
 };
 
 static void
-rmap_walk_init_level(struct slot_rmap_walk_iterator *iterator, int level)
+rmap_walk_init_level(struct slot_rmap_walk_iterator *iterator, int level, unsigned ept_index)
 {
 	iterator->level = level;
 	iterator->gfn = iterator->start_gfn;
-	iterator->rmap = __gfn_to_rmap(iterator->gfn, level, iterator->slot);
+	iterator->rmap = __gfn_to_rmap(iterator->gfn, level, iterator->slot, ept_index);
 	iterator->end_rmap = __gfn_to_rmap(iterator->end_gfn, level,
-					   iterator->slot);
+					   iterator->slot, ept_index);
 }
 
 static void
 slot_rmap_walk_init(struct slot_rmap_walk_iterator *iterator,
 		    struct kvm_memory_slot *slot, int start_level,
-		    int end_level, gfn_t start_gfn, gfn_t end_gfn)
+		    int end_level, gfn_t start_gfn, gfn_t end_gfn, unsigned ept_index)
 {
 	iterator->slot = slot;
 	iterator->start_level = start_level;
@@ -1504,7 +1514,7 @@ slot_rmap_walk_init(struct slot_rmap_walk_iterator *iterator,
 	iterator->start_gfn = start_gfn;
 	iterator->end_gfn = end_gfn;
 
-	rmap_walk_init_level(iterator, iterator->start_level);
+	rmap_walk_init_level(iterator, iterator->start_level, ept_index);
 }
 
 static bool slot_rmap_walk_okay(struct slot_rmap_walk_iterator *iterator)
@@ -1512,7 +1522,7 @@ static bool slot_rmap_walk_okay(struct slot_rmap_walk_iterator *iterator)
 	return !!iterator->rmap;
 }
 
-static void slot_rmap_walk_next(struct slot_rmap_walk_iterator *iterator)
+static void slot_rmap_walk_next(struct slot_rmap_walk_iterator *iterator, unsigned ept_index)
 {
 	if (++iterator->rmap <= iterator->end_rmap) {
 		iterator->gfn += (1UL << KVM_HPAGE_GFN_SHIFT(iterator->level));
@@ -1524,15 +1534,15 @@ static void slot_rmap_walk_next(struct slot_rmap_walk_iterator *iterator)
 		return;
 	}
 
-	rmap_walk_init_level(iterator, iterator->level);
+	rmap_walk_init_level(iterator, iterator->level, ept_index);
 }
 
 #define for_each_slot_rmap_range(_slot_, _start_level_, _end_level_,	\
-	   _start_gfn, _end_gfn, _iter_)				\
+	   _start_gfn, _end_gfn, _iter_, _ept_index)				\
 	for (slot_rmap_walk_init(_iter_, _slot_, _start_level_,		\
-				 _end_level_, _start_gfn, _end_gfn);	\
+				 _end_level_, _start_gfn, _end_gfn, _ept_index);	\
 	     slot_rmap_walk_okay(_iter_);				\
-	     slot_rmap_walk_next(_iter_))
+	     slot_rmap_walk_next(_iter_, _ept_index))
 
 static int kvm_handle_hva_range(struct kvm *kvm,
 				unsigned long start,
@@ -1550,6 +1560,9 @@ static int kvm_handle_hva_range(struct kvm *kvm,
 	struct slot_rmap_walk_iterator iterator;
 	int ret = 0;
 	int i;
+	unsigned ept_index;
+	ept_index = kvm->current_ept_index;
+
 
 	for (i = 0; i < KVM_ADDRESS_SPACE_NUM; i++) {
 		slots = __kvm_memslots(kvm, i);
@@ -1572,7 +1585,7 @@ static int kvm_handle_hva_range(struct kvm *kvm,
 			for_each_slot_rmap_range(memslot, PT_PAGE_TABLE_LEVEL,
 						 PT_MAX_HUGEPAGE_LEVEL,
 						 gfn_start, gfn_end - 1,
-						 &iterator)
+						 &iterator, ept_index)
 				ret |= handler(kvm, iterator.rmap, memslot,
 					       iterator.gfn, iterator.level, data);
 		}
@@ -2761,42 +2774,99 @@ static void direct_pte_prefetch(struct kvm_vcpu *vcpu, u64 *sptep)
 static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 			int level, gfn_t gfn, kvm_pfn_t pfn, bool prefault)
 {
-	struct kvm_shadow_walk_iterator iterator;
+	struct kvm_shadow_walk_iterator iterator;	
+	struct kvm_shadow_walk_iterator iterator_temp;
+	
 	struct kvm_mmu_page *sp;
 	int emulate = 0;
 	gfn_t pseudo_gfn;
 	unsigned ept_index;
+	bool last_level = false;
+
 	ept_index = vmx_get_current_ept_index(vcpu);
-//	printk(KERN_ERR "__direct_map, root_hpa: %016llx",vcpu->arch.mmu.ept_root_hpa_list[ept_index] );
-//	printk(KERN_ERR "__direct_map, eptp_list %u: %016llx",ept_index, vcpu->arch.mmu.eptp_list[ept_index] );
-//	printk(KERN_ERR "current ept index: %u",ept_index);
-
 	if (!VALID_PAGE(vcpu->arch.mmu.ept_root_hpa_list[ept_index]))
-//	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
-		return 0;
+	//	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
+			return 0;
+//	printk("level : %d \n", level);
 
-	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
-		if (iterator.level == level) {
-			emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
-					       write, level, gfn, pfn, prefault,
-					       map_writable);
-			direct_pte_prefetch(vcpu, iterator.sptep);
-			++vcpu->stat.pf_fixed;
-		//	printk(KERN_ERR "for_each_shadow_entry  mmu_set_spte \n");	
-			break;
+	 if (ept_index == 1){
+	//	printk(KERN_ERR "first time eptp = 1  \n");
+//memcpy(__va(vcpu->arch.mmu.ept_root_hpa_list[1]),__va(vcpu->arch.mmu.ept_root_hpa_list[0]),4096);
+              	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
+              	//	printk(KERN_ERR "iterator level: %d  \n", iterator.level );
+			if (iterator.level == level) {
+				last_level = true;
+				for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator_temp,0) {
+					//	printk(KERN_ERR "iterator temp level: %d  \n", iterator_temp.level );
+						if (iterator_temp.level == level) {
+							printk(KERN_ERR "iterator 1  \n");
+							emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
+								 write, iterator_temp.level, gfn, pfn, false,  	
+								map_writable);
+							 printk(KERN_ERR "2 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator_temp.sptep, gfn);
+							direct_pte_prefetch(vcpu, iterator.sptep);
+							++vcpu->stat.pf_fixed;
+							break;
+						}
+						if (!is_shadow_present_pte(*iterator_temp.sptep)) {
+							u64 base_addr = iterator_temp.addr;
+
+							base_addr &= PT64_LVL_ADDR_MASK(iterator_temp.level);
+							pseudo_gfn = base_addr >> PAGE_SHIFT;
+					
+							sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator_temp.addr,
+										 iterator_temp.level - 1, 1, ACC_ALL, 0);
+							printk(KERN_ERR "aaa kvm_mmu_get_page\n");
+							link_shadow_page(vcpu, iterator_temp.sptep, sp);
+						}							
+					}
+				}
+				if(last_level){
+					break;
+				}
+				drop_large_spte(vcpu, iterator.sptep); 
+			//	printk(KERN_ERR "qqq is_shadow_present_pte: %d, pte: %llx",is_shadow_present_pte(*iterator.sptep), *iterator.sptep);
+				if (!is_shadow_present_pte(*iterator.sptep)) {
+					u64 base_addr = iterator.addr;
+
+					base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
+					pseudo_gfn = base_addr >> PAGE_SHIFT;
+			
+					sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
+								 iterator.level - 1, 1, ACC_ALL, ept_index);
+					printk(KERN_ERR "sss kvm_mmu_get_page sptep:%llx  \n", iterator.sptep);
+					link_shadow_page(vcpu, iterator.sptep, sp);
+				}
+				
 		}
+		return emulate;
+	}
+	else{
+		for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
+			if (iterator.level == level) {
+				emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
+						       write, level, gfn, pfn, prefault,
+						       map_writable);
+				direct_pte_prefetch(vcpu, iterator.sptep);
+				++vcpu->stat.pf_fixed;
+				printk(KERN_ERR "1 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator.sptep, gfn);
+			//	printk(KERN_ERR "for_each_shadow_entry  mmu_set_spte \n");	
+				break;
+			}
 
-		drop_large_spte(vcpu, iterator.sptep); 
-		if (!is_shadow_present_pte(*iterator.sptep)) {
-			u64 base_addr = iterator.addr;
+			drop_large_spte(vcpu, iterator.sptep); 
+		//	printk(KERN_ERR "is_shadow_present_pte: %d, pte: %llx",is_shadow_present_pte(*iterator.sptep), *iterator.sptep);
+			if (!is_shadow_present_pte(*iterator.sptep)) {
+				u64 base_addr = iterator.addr;
 
-			base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
-			pseudo_gfn = base_addr >> PAGE_SHIFT;
-		//	printk(KERN_ERR "for_each_shadow_entry  kvm_mmu_get_page \n");	
-			sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
-					      iterator.level - 1, 1, ACC_ALL, ept_index);
-
-			link_shadow_page(vcpu, iterator.sptep, sp);
+				base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
+				pseudo_gfn = base_addr >> PAGE_SHIFT;
+			//	printk(KERN_ERR "for_each_shadow_entry  kvm_mmu_get_page \n");	
+				sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
+						      iterator.level - 1, 1, ACC_ALL, ept_index);
+			//	printk(KERN_ERR "kvm_mmu_get_page\n");
+				link_shadow_page(vcpu, iterator.sptep, sp);
+			}
 		}
 	}
 	return emulate;
@@ -4293,6 +4363,9 @@ int kvm_mmu_load_rest(struct kvm_vcpu *vcpu, unsigned ept_index)
 	if (r)
 		goto out;
 	r = mmu_alloc_roots(vcpu, ept_index);
+	printk(KERN_ERR "current ept : %u \n", ept_index);
+	
+	printk(KERN_ERR "set cr3 : %016llx \n",vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
 	vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.ept_root_hpa_list[ept_index]);
 	
 out:
@@ -4352,7 +4425,7 @@ void kvm_mmu_unload(struct kvm_vcpu *vcpu)
 
 	unsigned ept_index;
 	ept_index = vmx_get_current_ept_index(vcpu);
-	printk(KERN_ERR "kvm_mmu_unload current ept index:%u \n",ept_index);
+	printk(KERN_ERR "kvm_mmu_unload current ept index:%d \n",ept_index);
 
 	mmu_free_roots(vcpu, ept_index);
 	WARN_ON(VALID_PAGE(vcpu->arch.mmu.ept_root_hpa_list[ept_index]));
@@ -4608,54 +4681,7 @@ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
 	int r, emulation_type = EMULTYPE_RETRY;
 	enum emulation_result er;
 	bool direct = vcpu->arch.mmu.direct_map || mmu_is_nested(vcpu);
-	unsigned ept_index = vmx_get_current_ept_index(vcpu);
-	gfn_t pseudo_gfn;
-	struct kvm_shadow_walk_iterator iterator;
-	struct kvm_shadow_walk_iterator iterator_temp;
-	gfn_t gfn = cr2 >> PAGE_SHIFT;
-	kvm_pfn_t pfn;
-	int emulate = 0;
-	struct kvm_mmu_page *sp;
-	int write = error_code & PFERR_WRITE_MASK;
-	bool map_writable;
-	if (ept_index == 1 && !eptp_switching_first){
-		if (try_async_pf(vcpu, false, gfn, cr2, &pfn, write, &map_writable))
-			return 0;
 
-		if (handle_abnormal_pfn(vcpu, 0, gfn, pfn, ACC_ALL, &r))
-			return r;
-		printk(KERN_ERR "first time eptp = 1  \n");
-	//	memcpy (__va(vcpu->arch.mmu.ept_root_hpa_list[1]),__va(vcpu->arch.mmu.ept_root_hpa_list[0]),4096);
-              	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
-              		printk(KERN_ERR "level: %d  \n", iterator.level );
-			if (iterator.level == PT_PAGE_TABLE_LEVEL) {
-				for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator_temp,0) {
-					if (iterator_temp.level == PT_PAGE_TABLE_LEVEL) {
-						emulate = mmu_set_spte(vcpu, iterator_temp.sptep, ACC_ALL,
-					      	 write, iterator_temp.level, gfn, pfn, false,  	
-					       	map_writable);
-						 printk(KERN_ERR "mmu_set_spte ssss  \n");
-						direct_pte_prefetch(vcpu, iterator.sptep);
-						++vcpu->stat.pf_fixed;
-						break;
-					}
-				}
-			}
-			drop_large_spte(vcpu, iterator.sptep); 
-			if (!is_shadow_present_pte(*iterator.sptep)) {
-				u64 base_addr = iterator.addr;
-
-				base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
-				pseudo_gfn = base_addr >> PAGE_SHIFT;
-		
-				sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
-						     iterator.level - 1, 1, ACC_ALL, ept_index);
-				printk(KERN_ERR "kvm_mmu_get_page ssss  \n");
-				link_shadow_page(vcpu, iterator.sptep, sp);
-			}
-		}
-		eptp_switching_first = true;
-	}
 	if (unlikely(error_code & PFERR_RSVD_MASK)) {
 		r = handle_mmio_page_fault(vcpu, cr2, direct);
 		if (r == RET_MMIO_PF_EMULATE) {
@@ -4808,9 +4834,12 @@ slot_handle_level_range(struct kvm *kvm, struct kvm_memory_slot *memslot,
 {
 	struct slot_rmap_walk_iterator iterator;
 	bool flush = false;
+	unsigned ept_index;
+	ept_index = kvm->current_ept_index;
+	printk(KERN_ERR "current ept index is : %d\n", ept_index);
 
 	for_each_slot_rmap_range(memslot, start_level, end_level, start_gfn,
-			end_gfn, &iterator) {
+			end_gfn, &iterator, ept_index) {
 		if (iterator.rmap)
 			flush |= fn(kvm, iterator.rmap);
 
@@ -5273,4 +5302,4 @@ void kvm_mmu_module_exit(void)
 	percpu_counter_destroy(&kvm_total_used_mmu_pages);
 	unregister_shrinker(&mmu_shrinker);
 	mmu_audit_disable();
-}
+}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   

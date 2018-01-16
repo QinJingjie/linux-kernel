@@ -339,7 +339,7 @@ struct kvm_mmu {
 	hpa_t root_hpa;
 	hpa_t *ept_root_hpa_list;
 	u64 *eptp_list;
-	unsigned current_ept_index;
+	int current_ept_index;
 	u64 eptp;
 	unsigned num_epts;
 	int root_level;
@@ -692,6 +692,7 @@ struct kvm_lpage_info {
 
 struct kvm_arch_memory_slot {
 	struct kvm_rmap_head *rmap[KVM_NR_PAGE_SIZES];
+	struct kvm_rmap_head *rmap_list[10][KVM_NR_PAGE_SIZES];
 	struct kvm_lpage_info *lpage_info[KVM_NR_PAGE_SIZES - 1];
 	unsigned short *gfn_track[KVM_PAGE_TRACK_MAX];
 };

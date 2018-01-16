@@ -389,7 +389,7 @@ struct kvm {
 	struct srcu_struct srcu;
 	struct srcu_struct irq_srcu;
 	struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
-
+	unsigned current_ept_index;
 	/*
 	 * created_vcpus is protected by kvm->lock, and is incremented
 	 * at the beginning of KVM_CREATE_VCPU.  online_vcpus is only

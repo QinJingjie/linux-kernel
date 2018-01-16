@@ -134,6 +134,9 @@ static void inspect_spte_has_rmap(struct kvm *kvm, u64 *sptep)
 	struct kvm_memslots *slots;
 	struct kvm_memory_slot *slot;
 	gfn_t gfn;
+	unsigned ept_index;
+	ept_index = kvm->current_ept_index;
+
 
 	rev_sp = page_header(__pa(sptep));
 	gfn = kvm_mmu_page_get_gfn(rev_sp, sptep - rev_sp->spt);
@@ -150,7 +153,7 @@ static void inspect_spte_has_rmap(struct kvm *kvm, u64 *sptep)
 		return;
 	}
 
-	rmap_head = __gfn_to_rmap(gfn, rev_sp->role.level, slot);
+	rmap_head = __gfn_to_rmap(gfn, rev_sp->role.level, slot, ept_index);
 	if (!rmap_head->val) {
 		if (!__ratelimit(&ratelimit_state))
 			return;
@@ -197,13 +200,16 @@ static void audit_write_protection(struct kvm *kvm, struct kvm_mmu_page *sp)
 	struct rmap_iterator iter;
 	struct kvm_memslots *slots;
 	struct kvm_memory_slot *slot;
+	unsigned ept_index;
+	ept_index = kvm->current_ept_index;
+
 
 	if (sp->role.direct || sp->unsync || sp->role.invalid)
 		return;
 
 	slots = kvm_memslots_for_spte_role(kvm, sp->role);
 	slot = __gfn_to_memslot(slots, sp->gfn);
-	rmap_head = __gfn_to_rmap(sp->gfn, PT_PAGE_TABLE_LEVEL, slot);
+	rmap_head = __gfn_to_rmap(sp->gfn, PT_PAGE_TABLE_LEVEL, slot, ept_index);
 
 	for_each_rmap_spte(rmap_head, &iter, sptep) {
 		if (is_writable_pte(*sptep))

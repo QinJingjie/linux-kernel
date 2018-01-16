@@ -8059,11 +8059,12 @@ void kvm_arch_free_memslot(struct kvm *kvm, struct kvm_memory_slot *free,
 			   struct kvm_memory_slot *dont)
 {
 	int i;
-
+	int j;
 	for (i = 0; i < KVM_NR_PAGE_SIZES; ++i) {
-		if (!dont || free->arch.rmap[i] != dont->arch.rmap[i]) {
-			kvfree(free->arch.rmap[i]);
-			free->arch.rmap[i] = NULL;
+		for(j=0;j< 10;j++){
+		if (!dont || free->arch.rmap_list[j][i] != dont->arch.rmap_list[j][i]) {
+			kvfree(free->arch.rmap_list[j][i]);
+			free->arch.rmap_list[j][i] = NULL;
 		}
 		if (i == 0)
 			continue;
@@ -8072,6 +8073,7 @@ void kvm_arch_free_memslot(struct kvm *kvm, struct kvm_memory_slot *free,
 			     dont->arch.lpage_info[i - 1]) {
 			kvfree(free->arch.lpage_info[i - 1]);
 			free->arch.lpage_info[i - 1] = NULL;
+		}
 		}
 	}
 
@@ -8082,7 +8084,7 @@ int kvm_arch_create_memslot(struct kvm *kvm, struct kvm_memory_slot *slot,
 			    unsigned long npages)
 {
 	int i;
-
+	int j;
 	for (i = 0; i < KVM_NR_PAGE_SIZES; ++i) {
 		struct kvm_lpage_info *linfo;
 		unsigned long ugfn;
@@ -8091,14 +8093,18 @@ int kvm_arch_create_memslot(struct kvm *kvm, struct kvm_memory_slot *slot,
 
 		lpages = gfn_to_index(slot->base_gfn + npages - 1,
 				      slot->base_gfn, level) + 1;
+	
+//		slot->arch.rmap[i] =
+//			kvm_kvzalloc(lpages * sizeof(*slot->arch.rmap[i]));
+		for(j=0;j<10;j++){	
+			slot->arch.rmap_list[j][i] =
+						kvm_kvzalloc(lpages * sizeof(*slot->arch.rmap_list[j][i]));
 
-		slot->arch.rmap[i] =
-			kvm_kvzalloc(lpages * sizeof(*slot->arch.rmap[i]));
-		if (!slot->arch.rmap[i])
-			goto out_free;
+			if (!slot->arch.rmap_list[j][i])
+				goto out_free;
+		}
 		if (i == 0)
 			continue;
-
 		linfo = kvm_kvzalloc(lpages * sizeof(*linfo));
 		if (!linfo)
 			goto out_free;
@@ -8131,13 +8137,15 @@ int kvm_arch_create_memslot(struct kvm *kvm, struct kvm_memory_slot *slot,
 
 out_free:
 	for (i = 0; i < KVM_NR_PAGE_SIZES; ++i) {
-		kvfree(slot->arch.rmap[i]);
-		slot->arch.rmap[i] = NULL;
-		if (i == 0)
-			continue;
+		for(j=0;j<10;j++){
+			kvfree(slot->arch.rmap_list[j][i]);
+			slot->arch.rmap_list[j][i] = NULL;
+			if (i == 0)
+				continue;
 
-		kvfree(slot->arch.lpage_info[i - 1]);
-		slot->arch.lpage_info[i - 1] = NULL;
+			kvfree(slot->arch.lpage_info[i - 1]);
+			slot->arch.lpage_info[i - 1] = NULL;
+		}
 	}
 	return -ENOMEM;
 }
