@@ -2194,7 +2194,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	++vcpu->kvm->stat.mmu_cache_miss;
 
 	sp = kvm_mmu_alloc_page(vcpu, direct);
-	printk(KERN_ERR "alloc new mmu page %016llx",sp->spt );
+//	printk(KERN_ERR "alloc new mmu page %016llx",sp->spt );
 
 	sp->gfn = gfn;
 	sp->role = role;
@@ -2770,7 +2770,74 @@ static void direct_pte_prefetch(struct kvm_vcpu *vcpu, u64 *sptep)
 
 	__direct_pte_prefetch(vcpu, sp, sptep);
 }
+static int __direct_map_for_NEPT(struct kvm_vcpu *vcpu, int write, int map_writable,
+			int level, gfn_t gfn, kvm_pfn_t pfn, bool prefault)
+{
+	struct kvm_shadow_walk_iterator iterator;	
+	struct kvm_mmu_page *sp;
+	int emulate = 0;
+	gfn_t pseudo_gfn;
+	unsigned ept_index = 0;
 
+	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
+		printk(KERN_ERR "NEPT iterator level: %d\n", iterator.level);
+		if (iterator.level == level) {
+			emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
+				       write, level, gfn, pfn, prefault,
+				       map_writable);
+			iterator.sptep = get_zeroed_page(GFP_KERNEL | __GFP_ZERO);
+			printk(KERN_ERR "set sptep for NEPT\n");
+		//	direct_pte_prefetch(vcpu, iterator.sptep);
+			++vcpu->stat.pf_fixed;
+			break;
+		}
+		drop_large_spte(vcpu, iterator.sptep); 
+		if (!is_shadow_present_pte(*iterator.sptep)) {
+			u64 base_addr = iterator.addr;
+
+			base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
+			pseudo_gfn = base_addr >> PAGE_SHIFT;
+			sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
+					      iterator.level - 1, 1, ACC_ALL, ept_index);
+			printk(KERN_ERR "alloc page for NEPT iterator level: %d\n", iterator.level);
+			link_shadow_page(vcpu, iterator.sptep, sp);
+		}
+	}
+	return emulate;
+}
+static int __direct_map_for_SEPT(struct kvm_vcpu *vcpu, int write, int map_writable,
+			int level, gfn_t gfn, kvm_pfn_t pfn, bool prefault)
+{
+	struct kvm_shadow_walk_iterator iterator;	
+	struct kvm_mmu_page *sp;
+	int emulate = 0;
+	gfn_t pseudo_gfn;
+	unsigned ept_index = 1;
+	
+	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
+		if (iterator.level == level) {
+		emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
+				       write, level, gfn, pfn, prefault,
+				       map_writable);
+		printk(KERN_ERR "set sptep for SEPT\n");
+		direct_pte_prefetch(vcpu, iterator.sptep);
+		++vcpu->stat.pf_fixed;
+		break;
+	}
+		drop_large_spte(vcpu, iterator.sptep); 
+		if (!is_shadow_present_pte(*iterator.sptep)) {
+			u64 base_addr = iterator.addr;
+
+			base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
+			pseudo_gfn = base_addr >> PAGE_SHIFT;
+			sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
+					      iterator.level - 1, 1, ACC_ALL, ept_index);
+			printk(KERN_ERR "alloc page for SEPT iterator level: %d\n", iterator.level);
+			link_shadow_page(vcpu, iterator.sptep, sp);
+		}
+	}
+	return emulate;
+}
 static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 			int level, gfn_t gfn, kvm_pfn_t pfn, bool prefault)
 {
@@ -2787,59 +2854,56 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 	if (!VALID_PAGE(vcpu->arch.mmu.ept_root_hpa_list[ept_index]))
 	//	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 			return 0;
-//	printk("level : %d \n", level);
-
 	 if (ept_index == 1){
-	//	printk(KERN_ERR "first time eptp = 1  \n");
-//memcpy(__va(vcpu->arch.mmu.ept_root_hpa_list[1]),__va(vcpu->arch.mmu.ept_root_hpa_list[0]),4096);
-              	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
-              	//	printk(KERN_ERR "iterator level: %d  \n", iterator.level );
-			if (iterator.level == level) {
-				last_level = true;
-				for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator_temp,0) {
-					//	printk(KERN_ERR "iterator temp level: %d  \n", iterator_temp.level );
-						if (iterator_temp.level == level) {
-							printk(KERN_ERR "iterator 1  \n");
-							emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
-								 write, iterator_temp.level, gfn, pfn, false,  	
-								map_writable);
-							 printk(KERN_ERR "2 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator_temp.sptep, gfn);
-							direct_pte_prefetch(vcpu, iterator.sptep);
-							++vcpu->stat.pf_fixed;
-							break;
-						}
-						if (!is_shadow_present_pte(*iterator_temp.sptep)) {
-							u64 base_addr = iterator_temp.addr;
-
-							base_addr &= PT64_LVL_ADDR_MASK(iterator_temp.level);
-							pseudo_gfn = base_addr >> PAGE_SHIFT;
-					
-							sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator_temp.addr,
-										 iterator_temp.level - 1, 1, ACC_ALL, 0);
-							printk(KERN_ERR "aaa kvm_mmu_get_page\n");
-							link_shadow_page(vcpu, iterator_temp.sptep, sp);
-						}							
+	//memcpy(__va(vcpu->arch.mmu.ept_root_hpa_list[1]),__va(vcpu->arch.mmu.ept_root_hpa_list[0]),4096);
+	      	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
+	      	//	printk(KERN_ERR "iterator level: %d  \n", iterator.level );
+		if (iterator.level == level) {
+			last_level = true;
+			for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator_temp,0) {
+				//	printk(KERN_ERR "iterator temp level: %d  \n", iterator_temp.level );
+					if (iterator_temp.level == level) {
+						printk(KERN_ERR "iterator 1  \n");
+						emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
+							 write, iterator_temp.level, gfn, pfn, false,  	
+							map_writable);
+						 printk(KERN_ERR "2 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator_temp.sptep, gfn);
+						direct_pte_prefetch(vcpu, iterator.sptep);
+						++vcpu->stat.pf_fixed;
+						break;
 					}
-				}
-				if(last_level){
-					break;
-				}
-				drop_large_spte(vcpu, iterator.sptep); 
-			//	printk(KERN_ERR "qqq is_shadow_present_pte: %d, pte: %llx",is_shadow_present_pte(*iterator.sptep), *iterator.sptep);
-				if (!is_shadow_present_pte(*iterator.sptep)) {
-					u64 base_addr = iterator.addr;
+					if (!is_shadow_present_pte(*iterator_temp.sptep)) {
+						u64 base_addr = iterator_temp.addr;
 
-					base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
-					pseudo_gfn = base_addr >> PAGE_SHIFT;
-			
-					sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
-								 iterator.level - 1, 1, ACC_ALL, ept_index);
-					printk(KERN_ERR "sss kvm_mmu_get_page sptep:%llx  \n", iterator.sptep);
-					link_shadow_page(vcpu, iterator.sptep, sp);
-				}
+						base_addr &= PT64_LVL_ADDR_MASK(iterator_temp.level);
+						pseudo_gfn = base_addr >> PAGE_SHIFT;
 				
+						sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator_temp.addr,
+									 iterator_temp.level - 1, 1, ACC_ALL, 0);
+						printk(KERN_ERR "aaa kvm_mmu_get_page\n");
+						link_shadow_page(vcpu, iterator_temp.sptep, sp);
+					}							
+				}
+			}
+			if(last_level){
+				break;
+			}
+		//	drop_large_spte(vcpu, iterator.sptep); 
+		//	printk(KERN_ERR "qqq is_shadow_present_pte: %d, pte: %llx",is_shadow_present_pte(*iterator.sptep), *iterator.sptep);
+			if (!is_shadow_present_pte(*iterator.sptep)) {
+				u64 base_addr = iterator.addr;
+
+				base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
+				pseudo_gfn = base_addr >> PAGE_SHIFT;
+		
+				sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
+							 iterator.level - 1, 1, ACC_ALL, ept_index);
+				printk(KERN_ERR "sss kvm_mmu_get_page sptep:%llx  \n", iterator.sptep);
+				link_shadow_page(vcpu, iterator.sptep, sp);
+			}
+			
 		}
-		return emulate;
+	return emulate;
 	}
 	else{
 		for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator,ept_index) {
@@ -2848,8 +2912,9 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 						       write, level, gfn, pfn, prefault,
 						       map_writable);
 				direct_pte_prefetch(vcpu, iterator.sptep);
+				 printk(KERN_ERR "1 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator.sptep, gfn);
 				++vcpu->stat.pf_fixed;
-				printk(KERN_ERR "1 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator.sptep, gfn);
+			//	printk(KERN_ERR "1 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator.sptep, gfn);
 			//	printk(KERN_ERR "for_each_shadow_entry  mmu_set_spte \n");	
 				break;
 			}
@@ -2868,8 +2933,8 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 				link_shadow_page(vcpu, iterator.sptep, sp);
 			}
 		}
+		return emulate;
 	}
-	return emulate;
 }
 
 static void kvm_send_hwpoison_signal(unsigned long address, struct task_struct *tsk)
@@ -3705,6 +3770,69 @@ out_unlock:
 	kvm_release_pfn_clean(pfn);
 	return 0;
 }
+
+int static alloc_page_for_NEM_space(struct kvm_vcpu *vcpu, gpa_t gpa,
+		       void *insn, int insn_len)
+{
+	printk(KERN_ERR "start alloc NEM space\n");
+	 int r, nr, sr;
+	 kvm_pfn_t pfn;
+	 int level;
+	 gfn_t gfn = gpa >> PAGE_SHIFT;
+	 unsigned long mmu_seq;
+	 bool force_pt_level;
+	 int write =  0;
+	 bool map_writable;
+	 bool prefault = false;
+
+	r = mmu_topup_memory_caches(vcpu);
+	if (r)
+		return r;
+
+//	force_pt_level = !check_hugepage_cache_consistency(vcpu, gfn,
+//							   PT_DIRECTORY_LEVEL);
+	level = mapping_level(vcpu, gfn, &force_pt_level);
+	if (likely(!force_pt_level)) {
+		if (level > PT_DIRECTORY_LEVEL &&
+		    !check_hugepage_cache_consistency(vcpu, gfn, level))
+			level = PT_DIRECTORY_LEVEL;
+		gfn &= ~(KVM_PAGES_PER_HPAGE(level) - 1);
+	}
+	printk(KERN_ERR "test1\n");
+	mmu_seq = vcpu->kvm->mmu_notifier_seq;
+	smp_rmb();
+	if (try_async_pf(vcpu, prefault, gfn, gpa, &pfn, write, &map_writable))
+		return 0;
+	printk(KERN_ERR "test2\n");
+	if (handle_abnormal_pfn(vcpu, 0, gfn, pfn, ACC_ALL, &r))
+		return r;
+	printk(KERN_ERR "test3\n");
+	spin_lock(&vcpu->kvm->mmu_lock);
+	if (mmu_notifier_retry(vcpu->kvm, mmu_seq))
+		goto out_unlock;
+	printk(KERN_ERR "test4\n");
+	make_mmu_pages_available(vcpu);
+//	if (likely(!force_pt_level))
+//		transparent_hugepage_adjust(vcpu, &gfn, &pfn, &level);
+	printk(KERN_ERR "NEM gpa level %d\n", level);
+	//alloc mmu for SEPT
+	sr = __direct_map_for_SEPT(vcpu, write, map_writable, level, gfn, pfn, prefault);
+	//alloct mmu for NEPT but not mapped
+	nr = __direct_map_for_NEPT(vcpu, write, map_writable, level, gfn, pfn, prefault);
+	spin_unlock(&vcpu->kvm->mmu_lock);
+	return sr;
+out_unlock:
+	spin_unlock(&vcpu->kvm->mmu_lock);
+	kvm_release_pfn_clean(pfn);
+	return 0;
+}
+
+int hanlde_alloc_page_NEM_hypercall(struct kvm_vcpu *vcpu, gpa_t gpa)
+{
+	int r = alloc_page_for_NEM_space(vcpu, gpa, NULL, 0);
+	return r;
+}
+EXPORT_SYMBOL_GPL(hanlde_alloc_page_NEM_hypercall);
 
 static void nonpaging_init_context(struct kvm_vcpu *vcpu,
 				   struct kvm_mmu *context)
@@ -4682,6 +4810,10 @@ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
 	enum emulation_result er;
 	bool direct = vcpu->arch.mmu.direct_map || mmu_is_nested(vcpu);
 
+//	if(!eptp_switching_first){
+//		memcpy(__va(vcpu->arch.mmu.ept_root_hpa_list[1]),__va(vcpu->arch.mmu.ept_root_hpa_list[0]),4096);
+//		eptp_switching_first = true;
+//		}
 	if (unlikely(error_code & PFERR_RSVD_MASK)) {
 		r = handle_mmio_page_fault(vcpu, cr2, direct);
 		if (r == RET_MMIO_PF_EMULATE) {

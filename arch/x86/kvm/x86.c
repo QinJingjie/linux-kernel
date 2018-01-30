@@ -65,6 +65,7 @@
 #include <asm/pvclock.h>
 #include <asm/div64.h>
 #include <asm/irq_remapping.h>
+#include <asm/vmx.h>
 
 #define CREATE_TRACE_POINTS
 #include "trace.h"
@@ -196,6 +197,23 @@ struct kvm_stats_debugfs_item debugfs_entries[] = {
 u64 __read_mostly host_xcr0;
 
 static int emulator_fix_hypercall(struct x86_emulate_ctxt *ctxt);
+
+
+/*
+ * Read memory by address
+ * Returning O means success.
+ * */
+int read_data_from_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len)
+{
+	gva_t gva = (gva_t)address;
+	u32 access = 0;
+	struct x86_exception *exception;
+	//map address from guest virtual address to guest physical address
+	gpa_t gpa = (vcpu->arch.mmu).gva_to_gpa(vcpu, gva, access, exception);
+	return kvm_read_guest(vcpu->kvm, gpa,data,len);
+}
+EXPORT_SYMBOL_GPL(read_data_from_guest);
+
 
 static inline void kvm_async_pf_hash_reset(struct kvm_vcpu *vcpu)
 {
@@ -6111,11 +6129,26 @@ void kvm_vcpu_deactivate_apicv(struct kvm_vcpu *vcpu)
 	kvm_x86_ops->refresh_apicv_exec_ctrl(vcpu);
 }
 
+void kvm_vcpu_alloc_NEM_space(struct kvm_vcpu *vcpu, u64 address)
+{
+	printk(KERN_ERR "alloc NEM space gva:%llx\n", address);
+	gva_t gva = (gva_t)address;
+	u32 access = 0;
+	u32 error_code;
+	struct x86_exception *exception;
+	gpa_t gpa = (vcpu->arch.mmu).gva_to_gpa(vcpu, gva, access, exception);
+	printk(KERN_ERR "alloc NEM space gpa: %llx\n", gpa);
+	hanlde_alloc_page_NEM_hypercall(vcpu, gpa);
+}
+
 int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 {
 	unsigned long nr, a0, a1, a2, a3, ret;
 	int op_64_bit, r;
-
+	struct NEM_log{
+		int syscall_number;	
+	};
+	struct NEM_log nem;
 	r = kvm_skip_emulated_instruction(vcpu);
 
 	if (kvm_hv_hypercall_enabled(vcpu->kvm))
@@ -6128,7 +6161,6 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 	a3 = kvm_register_read(vcpu, VCPU_REGS_RSI);
 
 	trace_kvm_hypercall(nr, a0, a1, a2, a3);
-
 	op_64_bit = is_64_bit_mode(vcpu);
 	if (!op_64_bit) {
 		nr &= 0xFFFFFFFF;
@@ -6143,6 +6175,9 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		goto out;
 	}
 
+	printk(KERN_ERR "a0 : %lx \n", a0);
+	
+	
 	switch (nr) {
 	case KVM_HC_VAPIC_POLL_IRQ:
 		ret = 0;
@@ -6151,8 +6186,14 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		kvm_pv_kick_cpu_op(vcpu->kvm, a0, a1);
 		ret = 0;
 		break;
+	case KVM_HC_ALLOC_NEM_SPACE:
+		kvm_vcpu_alloc_NEM_space(vcpu, a0);
+		ret  = 0;
+		break;
 	default:
 		ret = -KVM_ENOSYS;
+		if(!read_data_from_guest(vcpu, a0, &nem, sizeof(struct NEM_log )))
+			printk(KERN_ERR "vmcall sys call:%d\n",nem.syscall_number);
 		break;
 	}
 out:
