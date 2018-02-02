@@ -168,7 +168,6 @@ int kvm_read_guest_virt(struct x86_emulate_ctxt *ctxt,
 int kvm_write_guest_virt_system(struct x86_emulate_ctxt *ctxt,
 	gva_t addr, void *val, unsigned int bytes,
 	struct x86_exception *exception);
-int read_data_from_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len);
 
 void kvm_vcpu_mtrr_init(struct kvm_vcpu *vcpu);
 u8 kvm_mtrr_get_guest_memory_type(struct kvm_vcpu *vcpu, gfn_t gfn);

@@ -198,23 +198,6 @@ u64 __read_mostly host_xcr0;
 
 static int emulator_fix_hypercall(struct x86_emulate_ctxt *ctxt);
 
-
-/*
- * Read memory by address
- * Returning O means success.
- * */
-int read_data_from_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len)
-{
-	gva_t gva = (gva_t)address;
-	u32 access = 0;
-	struct x86_exception *exception;
-	//map address from guest virtual address to guest physical address
-	gpa_t gpa = (vcpu->arch.mmu).gva_to_gpa(vcpu, gva, access, exception);
-	return kvm_read_guest(vcpu->kvm, gpa,data,len);
-}
-EXPORT_SYMBOL_GPL(read_data_from_guest);
-
-
 static inline void kvm_async_pf_hash_reset(struct kvm_vcpu *vcpu)
 {
 	int i;
@@ -6136,7 +6119,7 @@ void kvm_vcpu_alloc_NEM_space(struct kvm_vcpu *vcpu, u64 address)
 	u32 access = 0;
 	u32 error_code;
 	struct x86_exception *exception;
-	gpa_t gpa = (vcpu->arch.mmu).gva_to_gpa(vcpu, gva, access, exception);
+	gpa_t gpa = kvm_mmu_gva_to_gpa_read(vcpu, gva, exception);
 	printk(KERN_ERR "alloc NEM space gpa: %llx\n", gpa);
 	hanlde_alloc_page_NEM_hypercall(vcpu, gpa);
 }
@@ -6145,10 +6128,13 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 {
 	unsigned long nr, a0, a1, a2, a3, ret;
 	int op_64_bit, r;
+	void *data;
 	struct NEM_log{
 		int syscall_number;	
 	};
-	struct NEM_log nem;
+	struct NEM_log *nem;
+	nem = (struct NEM_log *)kmalloc(sizeof(struct NEM_log), GFP_KERNEL);
+	struct task_struct task;
 	r = kvm_skip_emulated_instruction(vcpu);
 
 	if (kvm_hv_hypercall_enabled(vcpu->kvm))
@@ -6192,8 +6178,12 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		break;
 	default:
 		ret = -KVM_ENOSYS;
-		if(!read_data_from_guest(vcpu, a0, &nem, sizeof(struct NEM_log )))
-			printk(KERN_ERR "vmcall sys call:%d\n",nem.syscall_number);
+	//	if(!read_data_from_guest(vcpu, a0, nem, sizeof(struct NEM_log )))
+	//		printk(KERN_ERR "vmcall sys call:%d\n",nem->syscall_number);
+		if(!read_data_from_guest(vcpu, a0, data, 10))
+			printk(KERN_ERR "function data:%s\n", data);
+	//	if(!read_data_from_guest(vcpu, a0, &task, sizeof(struct task_struct)))
+	//		printk(KERN_ERR "function data:%d\n", task.flags);
 		break;
 	}
 out:

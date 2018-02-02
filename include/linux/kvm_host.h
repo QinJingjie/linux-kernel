@@ -66,6 +66,15 @@
 #define KVM_PFN_ERR_FAULT	(KVM_PFN_ERR_MASK)
 #define KVM_PFN_ERR_HWPOISON	(KVM_PFN_ERR_MASK + 1)
 #define KVM_PFN_ERR_RO_FAULT	(KVM_PFN_ERR_MASK + 2)
+// qjj
+struct my_kvm_info_struct{
+    struct kvm_vcpu *vcpu;
+};
+//qjj pass pid and uuid through ioctl
+struct kill_pro_identity {
+	pid_t pid;
+	uint8_t uuid[16];
+};
 
 /*
  * error pfns indicate that the gfn is in slot but faild to
@@ -274,6 +283,9 @@ struct kvm_vcpu {
 	bool preempted;
 	struct kvm_vcpu_arch arch;
 	struct dentry *debugfs_dentry;
+
+	//vm information list, all the vm running in this vcpu
+	void *vm_info;
 };
 
 static inline int kvm_vcpu_exiting_guest_mode(struct kvm_vcpu *vcpu)
@@ -684,6 +696,8 @@ int kvm_vcpu_read_guest_atomic(struct kvm_vcpu *vcpu, gpa_t gpa, void *data,
 			       unsigned long len);
 int kvm_vcpu_read_guest(struct kvm_vcpu *vcpu, gpa_t gpa, void *data,
 			unsigned long len);
+int read_data_from_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len);
+
 int kvm_vcpu_write_guest_page(struct kvm_vcpu *vcpu, gfn_t gfn, const void *data,
 			      int offset, int len);
 int kvm_vcpu_write_guest(struct kvm_vcpu *vcpu, gpa_t gpa, const void *data,

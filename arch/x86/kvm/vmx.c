@@ -50,9 +50,11 @@
 #include <asm/irq_remapping.h>
 #include <asm/page.h>
 
-
 #include "trace.h"
 #include "pmu.h"
+
+#include "nem_interface.h"
+#include "nem_operations.h"
 
 #define __ex(x) __kvm_handle_fault_on_reboot(x)
 #define __ex_clear(x, reg) \
@@ -515,6 +517,34 @@ struct pi_desc {
 	};
 	u32 rsvd[6];
 } __aligned(64);
+
+static struct nem_operations nem_ops;
+//qjj
+//set kvm intel module monitor interface
+int register_monitor_interface(struct nem_operations *ops)
+{
+	if(ops == NULL)
+		return -1;
+	if(ops->create_vm_info == NULL)
+	{
+		return -1;
+	}
+	nem_ops.create_vm_info = ops->create_vm_info;
+//	nem_ops.destroy_vm_info = ops->destroy_vm_info;
+	exist_monitor_system = VMM_MONITOR_ON;
+	return 0;
+}
+
+//unset kvm intel module monitor interface
+int unregister_monitor_interface(void)
+{
+	/*
+	 * the orginal method is set NULL to every function pointer separately
+	 *  */
+	memset(&nem_ops, 0, sizeof(struct vmm_sec_operations));
+	exist_monitor_system = VMM_MONITOR_OFF;
+	return 0;
+}
 
 static bool pi_test_and_set_on(struct pi_desc *pi_desc)
 {
@@ -1029,6 +1059,11 @@ static const struct kvm_vmx_segment_field {
 };
 
 static u64 host_efer;
+
+//qjj: struct to get kvm_info (vcpu)
+struct my_kvm_info_struct my_kvm_info;
+EXPORT_SYMBOL(my_kvm_info);
+
 
 static void ept_save_pdptrs(struct kvm_vcpu *vcpu);
 
@@ -6711,7 +6746,7 @@ static __init int hardware_setup(void)
 
 	if (enable_ept && !cpu_has_vmx_ept_2m_page())
 		kvm_disable_largepages();
-	
+
 	if (!cpu_has_vmx_ple())
 		ple_gap = 0;
 
@@ -6793,7 +6828,7 @@ static __init int hardware_setup(void)
 	if(!cpu_has_vmx_virt_exceptions()){
 		printk(KERN_ERR "kvm: NO #VE!\n");
 	}
-	
+
 	if (!enable_pml) {
 		kvm_x86_ops->slot_enable_log_dirty = NULL;
 		kvm_x86_ops->slot_disable_log_dirty = NULL;
@@ -9056,6 +9091,8 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 	unsigned long debugctlmsr, cr4;
+    	//qjj: get vcpu
+    	my_kvm_info.vcpu = vcpu;
 
 	/* Record the guest's net vcpu time for enforced NMI injections. */
 	if (unlikely(!cpu_has_virtual_nmis() && vmx->soft_vnmi_blocked))
@@ -9266,7 +9303,7 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
 	vmx_complete_atomic_exit(vmx);
 	vmx_recover_nmi_blocking(vmx);
 	vmx_complete_interrupts(vmx);
-	 
+
 }
 
 static void vmx_load_vmcs01(struct kvm_vcpu *vcpu)
@@ -10405,7 +10442,7 @@ static int prepare_vmcs02(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
 	/* vmcs12's VM_ENTRY_LOAD_IA32_EFER and VM_ENTRY_IA32E_MODE are
 	 * emulated by vmx_set_efer(), below.
 	 */
-	vm_entry_controls_init(vmx, 
+	vm_entry_controls_init(vmx,
 		(vmcs12->vm_entry_controls & ~VM_ENTRY_LOAD_IA32_EFER &
 			~VM_ENTRY_IA32E_MODE) |
 		(vmcs_config.vmentry_ctrl & ~VM_ENTRY_IA32E_MODE));

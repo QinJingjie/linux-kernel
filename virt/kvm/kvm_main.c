@@ -1756,8 +1756,10 @@ static int __kvm_read_guest_page(struct kvm_memory_slot *slot, gfn_t gfn,
 	unsigned long addr;
 
 	addr = gfn_to_hva_memslot_prot(slot, gfn, NULL);
-	if (kvm_is_error_hva(addr))
+	if (kvm_is_error_hva(addr)){
+		printk(KERN_ERR "err hva!\n");
 		return -EFAULT;
+	}
 	r = __copy_from_user(data, (void __user *)addr + offset, len);
 	if (r)
 		return -EFAULT;
@@ -1801,6 +1803,26 @@ int kvm_read_guest(struct kvm *kvm, gpa_t gpa, void *data, unsigned long len)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(kvm_read_guest);
+
+/*
+ * Read memory by address
+ * Returning O means success.
+ * */
+int read_data_from_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len)
+{
+	gva_t gva = (gva_t)address;
+	printk(KERN_ERR  "read data gva : %lx\n", address);
+	struct x86_exception *exception;
+	int access = 0;
+	//map address from guest virtual address to guest physical address
+	gpa_t gpa = (vcpu->arch.mmu).gva_to_gpa(vcpu, gva, access, exception);
+//	gpa_t gpa = kvm_mmu_gva_to_gpa_read(vcpu, gva, exception);
+
+	printk(KERN_ERR  "read data gpa : %lx\n", gpa);
+	return kvm_vcpu_read_guest(vcpu, gpa,data,len);
+//	return 1;
+}
+EXPORT_SYMBOL_GPL(read_data_from_guest);
 
 int kvm_vcpu_read_guest(struct kvm_vcpu *vcpu, gpa_t gpa, void *data, unsigned long len)
 {

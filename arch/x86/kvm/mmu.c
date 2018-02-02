@@ -2912,7 +2912,7 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 						       write, level, gfn, pfn, prefault,
 						       map_writable);
 				direct_pte_prefetch(vcpu, iterator.sptep);
-				 printk(KERN_ERR "1 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator.sptep, gfn);
+			//	 printk(KERN_ERR "1 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator.sptep, gfn);
 				++vcpu->stat.pf_fixed;
 			//	printk(KERN_ERR "1 mmu_set_spte sptep: %llx ,gfn:  %llx\n", iterator.sptep, gfn);
 			//	printk(KERN_ERR "for_each_shadow_entry  mmu_set_spte \n");	
@@ -5427,7 +5427,6 @@ void kvm_mmu_destroy(struct kvm_vcpu *vcpu)
 	free_mmu_pages(vcpu);
 	mmu_free_memory_caches(vcpu);
 }
-
 void kvm_mmu_module_exit(void)
 {
 	mmu_destroy_caches();
