@@ -1,4 +1,4 @@
-#define VMM_API_DEV_PATH "/dev/vmm-api"
+#define VMM_API_DEV_PATH "/dev/nem"
 
 #ifdef TASK_COMM_LEN	/* this macro is define in include/linux/sched.h */
 #define PNODE_CMD_LEN TASK_COMM_LEN
@@ -8,13 +8,13 @@
 #define VMM_API_IOC_MAGIC 'a'
 #define VMM_API_GET_PROC		_IOR(VMM_API_IOC_MAGIC,		1,	struct proc_details)
 #define VMM_API_KILL_PROC_BY_PID		_IOWR(VMM_API_IOC_MAGIC,		2, pid_t)
-
-strcut proc_identity {
+#define VMM_API_IOC_MAXNR											20
+struct proc_identity {
 	unsigned long task_struct_addr;	
 	int pid;
 	char cmd[PNODE_CMD_LEN];
 	unsigned int pgd;
-}	
+};	
 
 struct proc_details {
 	struct proc_identity proc_identity;
@@ -26,3 +26,9 @@ struct proc_details {
 	int state;
 	int has_next_proc;		/* only used before copy_to_user */
 };	
+
+enum IF_HAS_NEXT{
+	UNKNOWN_NEXT,
+	HAS_NEXT,
+	NO_NEXT,
+};

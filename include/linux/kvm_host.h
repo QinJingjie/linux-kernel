@@ -71,10 +71,10 @@ struct my_kvm_info_struct{
     struct kvm_vcpu *vcpu;
 };
 //qjj pass pid and uuid through ioctl
-struct kill_pro_identity {
-	pid_t pid;
-	uint8_t uuid[16];
-};
+//struct kill_pro_identity {
+//	pid_t pid;
+//	uint8_t uuid[16];
+//};
 
 /*
  * error pfns indicate that the gfn is in slot but faild to
@@ -697,6 +697,7 @@ int kvm_vcpu_read_guest_atomic(struct kvm_vcpu *vcpu, gpa_t gpa, void *data,
 int kvm_vcpu_read_guest(struct kvm_vcpu *vcpu, gpa_t gpa, void *data,
 			unsigned long len);
 int read_data_from_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len);
+int write_data_to_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len);
 
 int kvm_vcpu_write_guest_page(struct kvm_vcpu *vcpu, gfn_t gfn, const void *data,
 			      int offset, int len);

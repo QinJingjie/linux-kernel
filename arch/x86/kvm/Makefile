@@ -1,3 +1,9 @@
+# qjj
+#vmm_api module name
+obj-m := nem.o
+#vmm_api device file name
+nem-dev := nem
+nem-objs	:= vmm_api.o nem_operations.o
 
 ccflags-y += -Iarch/x86/kvm
 
@@ -23,9 +29,4 @@ kvm-amd-y		+= svm.o pmu_amd.o
 obj-$(CONFIG_KVM)	+= kvm.o
 obj-$(CONFIG_KVM_INTEL)	+= kvm-intel.o
 obj-$(CONFIG_KVM_AMD)	+= kvm-amd.o
-# qjj
-TARGET := jsk_test
-obj-m += $(TARGET).o
-#$(TARGET)-objs = kvm.o kvm-intel.o
-#KBUILD_EXTRA_SYMBOLS += ../kvm/Modules.symvers
-#export KBUILD_EXTRA_SYMBOLS
+

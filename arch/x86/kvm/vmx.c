@@ -53,9 +53,8 @@
 #include "trace.h"
 #include "pmu.h"
 
-#include "nem_interface.h"
 #include "nem_operations.h"
-
+#include "nem_interface.h"
 #define __ex(x) __kvm_handle_fault_on_reboot(x)
 #define __ex_clear(x, reg) \
 	____kvm_handle_fault_on_reboot(x, "xor " reg " , " reg)
@@ -517,7 +516,7 @@ struct pi_desc {
 	};
 	u32 rsvd[6];
 } __aligned(64);
-
+static int exist_monitor_system = 0;
 static struct nem_operations nem_ops;
 //qjj
 //set kvm intel module monitor interface
@@ -530,10 +529,11 @@ int register_monitor_interface(struct nem_operations *ops)
 		return -1;
 	}
 	nem_ops.create_vm_info = ops->create_vm_info;
-//	nem_ops.destroy_vm_info = ops->destroy_vm_info;
-	exist_monitor_system = VMM_MONITOR_ON;
+	nem_ops.destroy_vm_info = ops->destroy_vm_info;
+	exist_monitor_system = 0;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(register_monitor_interface);
 
 //unset kvm intel module monitor interface
 int unregister_monitor_interface(void)
@@ -541,10 +541,11 @@ int unregister_monitor_interface(void)
 	/*
 	 * the orginal method is set NULL to every function pointer separately
 	 *  */
-	memset(&nem_ops, 0, sizeof(struct vmm_sec_operations));
+	memset(&nem_ops, 0, sizeof(struct nem_operations));
 	exist_monitor_system = VMM_MONITOR_OFF;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(unregister_monitor_interface);
 
 static bool pi_test_and_set_on(struct pi_desc *pi_desc)
 {
@@ -2644,7 +2645,6 @@ static void vmx_set_msr_bitmap(struct kvm_vcpu *vcpu)
 		else
 			msr_bitmap = vmx_msr_bitmap_legacy;
 	}
-
 	vmcs_write64(MSR_BITMAP, __pa(msr_bitmap));
 }
 
@@ -3364,6 +3364,7 @@ static void vmx_leave_nested(struct kvm_vcpu *vcpu);
  * Returns 0 on success, non-0 otherwise.
  * Assumes vcpu_load() was already called.
  */
+
 static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
@@ -3394,6 +3395,17 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		vmcs_write32(GUEST_SYSENTER_CS, data);
 		break;
 	case MSR_IA32_SYSENTER_EIP:
+		//qjj
+	//	printk(KERN_ERR "exist_monitor_system: %d\n", exist_monitor_system);
+		if(0 == exist_monitor_system)
+		{
+			ret = nem_ops.create_vm_info(vcpu);
+			exist_monitor_system = 1;
+		}
+		// if(!ret)
+		// {
+		// 	printk(KERN_ERR "create vm info success\n");
+		// }
 		vmcs_writel(GUEST_SYSENTER_EIP, data);
 		break;
 	case MSR_IA32_SYSENTER_ESP:
@@ -5347,7 +5359,7 @@ static int vmx_vcpu_setup(struct vcpu_vmx *vmx)
 	unsigned long a;
 #endif
 	int i;
-
+	
 	/* I/O */
 	vmcs_write64(IO_BITMAP_A, __pa(vmx_io_bitmap_a));
 	vmcs_write64(IO_BITMAP_B, __pa(vmx_io_bitmap_b));
@@ -5356,8 +5368,10 @@ static int vmx_vcpu_setup(struct vcpu_vmx *vmx)
 		vmcs_write64(VMREAD_BITMAP, __pa(vmx_vmread_bitmap));
 		vmcs_write64(VMWRITE_BITMAP, __pa(vmx_vmwrite_bitmap));
 	}
-	if (cpu_has_vmx_msr_bitmap())
+	if (cpu_has_vmx_msr_bitmap()){
+		printk(KERN_ERR  "vmx_msr_bitmap_legacy  is %lx\n", __pa(vmx_msr_bitmap_legacy));
 		vmcs_write64(MSR_BITMAP, __pa(vmx_msr_bitmap_legacy));
+	}
 
 	vmcs_write64(VMCS_LINK_POINTER, -1ull); /* 22.3.1.5 */
 
@@ -5451,7 +5465,8 @@ static int vmx_vcpu_setup(struct vcpu_vmx *vmx)
 	if(enable_eptp_switching) {
 		vmcs_write64(EPTP_LIST_ADDRESS, __pa(vmx->vcpu.arch.mmu.eptp_list));
 	}
-
+	//enable LBR
+	vmcs_write64(GUEST_IA32_DEBUGCTL, 1);
 	return 0;
 }
 
@@ -5503,7 +5518,7 @@ static void vmx_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 		vmcs_write32(GUEST_SYSENTER_CS, 0);
 		vmcs_writel(GUEST_SYSENTER_ESP, 0);
 		vmcs_writel(GUEST_SYSENTER_EIP, 0);
-		vmcs_write64(GUEST_IA32_DEBUGCTL, 0);
+		vmcs_write64(GUEST_IA32_DEBUGCTL, 1);
 	}
 
 	vmcs_writel(GUEST_RFLAGS, 0x02);
@@ -6766,6 +6781,13 @@ static __init int hardware_setup(void)
 	vmx_disable_intercept_for_msr(MSR_IA32_SYSENTER_ESP, false);
 	vmx_disable_intercept_for_msr(MSR_IA32_SYSENTER_EIP, false);
 	vmx_disable_intercept_for_msr(MSR_IA32_BNDCFGS, true);
+	vmx_disable_intercept_for_msr(MSR_IA32_DEBUGCTLMSR, true);
+	vmx_disable_intercept_for_msr(MSR_LBR_CORE_FROM, true);
+	vmx_disable_intercept_for_msr(MSR_LBR_CORE_TO, true);
+	vmx_disable_intercept_for_msr(MSR_LBR_SELECT, true);
+	vmx_disable_intercept_for_msr(MSR_LBR_TOS, true);
+	vmx_disable_intercept_for_msr(MSR_LBR_NHM_FROM, true);
+	vmx_disable_intercept_for_msr(MSR_LBR_NHM_TO, true);
 
 	memcpy(vmx_msr_bitmap_legacy_x2apic_apicv,
 			vmx_msr_bitmap_legacy, PAGE_SIZE);

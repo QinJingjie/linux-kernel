@@ -5,7 +5,6 @@
 #include <linux/syscalls.h>
 #include <linux/list.h>
 #include <linux/kvm_host.h>
-#include <linux/sched.h>
 MODULE_LICENSE("Dual BSD/GPL");
 // init_task ffffffff81e10500
 // init_thread_union ffffffff81e00000

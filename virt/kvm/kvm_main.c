@@ -1804,25 +1804,6 @@ int kvm_read_guest(struct kvm *kvm, gpa_t gpa, void *data, unsigned long len)
 }
 EXPORT_SYMBOL_GPL(kvm_read_guest);
 
-/*
- * Read memory by address
- * Returning O means success.
- * */
-int read_data_from_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len)
-{
-	gva_t gva = (gva_t)address;
-	printk(KERN_ERR  "read data gva : %lx\n", address);
-	struct x86_exception *exception;
-	int access = 0;
-	//map address from guest virtual address to guest physical address
-	gpa_t gpa = (vcpu->arch.mmu).gva_to_gpa(vcpu, gva, access, exception);
-//	gpa_t gpa = kvm_mmu_gva_to_gpa_read(vcpu, gva, exception);
-
-	printk(KERN_ERR  "read data gpa : %lx\n", gpa);
-	return kvm_vcpu_read_guest(vcpu, gpa,data,len);
-//	return 1;
-}
-EXPORT_SYMBOL_GPL(read_data_from_guest);
 
 int kvm_vcpu_read_guest(struct kvm_vcpu *vcpu, gpa_t gpa, void *data, unsigned long len)
 {
@@ -1860,6 +1841,45 @@ static int __kvm_read_guest_atomic(struct kvm_memory_slot *slot, gfn_t gfn,
 		return -EFAULT;
 	return 0;
 }
+
+/*
+ * Read memory by address
+ * Returning O means success.
+ * */
+int read_data_from_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len)
+{
+	gva_t gva = (gva_t)address;
+	printk(KERN_ERR "read_data_from_guest vcpu: %lx\n", vcpu);
+	printk(KERN_ERR  "read data gva : %lx\n", address);
+	struct x86_exception *exception;
+	int access = 0;
+	//map address from guest virtual address to guest physical address
+//	gpa_t gpa = (vcpu->arch.mmu).gva_to_gpa(vcpu, gva, access, exception);
+	gpa_t gpa = kvm_mmu_gva_to_gpa_read(vcpu, gva, exception);
+	
+	if(exception != NULL){
+	printk(KERN_ERR "exception: vector:%c, error_code_valid: %d, error_code: %u, nested_page_fault:%d, address: %lx\n", 
+		exception->vector, exception->error_code_valid, exception->error_code,
+		exception->nested_page_fault, exception->address);
+	}
+	printk(KERN_ERR  "read data gpa : %lx\n", gpa);
+	return kvm_read_guest(vcpu->kvm, gpa,data,len);
+//	return 1;
+}
+EXPORT_SYMBOL_GPL(read_data_from_guest);
+
+//write memory by address
+int write_data_to_guest(struct kvm_vcpu *vcpu, u64 address, void *data, unsigned long len)
+{
+	gva_t gva = (gva_t)address;
+	u32 access = PFERR_WRITE_MASK;
+	struct x86_exception *exception;
+	//map address from guest virtual address to guest physical address
+	gpa_t gpa = (vcpu->arch.mmu).gva_to_gpa(vcpu, gva, access, exception);
+	return kvm_write_guest(vcpu->kvm, gpa, data, len);
+}
+EXPORT_SYMBOL_GPL(write_data_to_guest);
+
 
 int kvm_read_guest_atomic(struct kvm *kvm, gpa_t gpa, void *data,
 			  unsigned long len)

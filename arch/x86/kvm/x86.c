@@ -66,6 +66,7 @@
 #include <asm/div64.h>
 #include <asm/irq_remapping.h>
 #include <asm/vmx.h>
+#include "nem_interface.h"
 
 #define CREATE_TRACE_POINTS
 #include "trace.h"
@@ -4316,6 +4317,8 @@ gpa_t kvm_mmu_gva_to_gpa_read(struct kvm_vcpu *vcpu, gva_t gva,
 			      struct x86_exception *exception)
 {
 	u32 access = (kvm_x86_ops->get_cpl(vcpu) == 3) ? PFERR_USER_MASK : 0;
+	printk(KERN_ALERT "kvm_mmu_gva_to_gpa_read access: %d", access);
+	printk(KERN_ALERT "gva_to_gpa address: %lx", vcpu->arch.walk_mmu->gva_to_gpa);
 	return vcpu->arch.walk_mmu->gva_to_gpa(vcpu, gva, access, exception);
 }
 
@@ -6123,6 +6126,8 @@ void kvm_vcpu_alloc_NEM_space(struct kvm_vcpu *vcpu, u64 address)
 	printk(KERN_ERR "alloc NEM space gpa: %llx\n", gpa);
 	hanlde_alloc_page_NEM_hypercall(vcpu, gpa);
 }
+struct task_struct *init_task_struct;
+EXPORT_SYMBOL(init_task_struct);
 
 int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 {
@@ -6134,7 +6139,10 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 	};
 	struct NEM_log *nem;
 	nem = (struct NEM_log *)kmalloc(sizeof(struct NEM_log), GFP_KERNEL);
-	struct task_struct task;
+	struct task_struct *task;
+	task = kmalloc(sizeof(struct task_struct), GFP_KERNEL);
+	char *comm;
+	comm =  kmalloc(20, GFP_KERNEL);
 	r = kvm_skip_emulated_instruction(vcpu);
 
 	if (kvm_hv_hypercall_enabled(vcpu->kvm))
@@ -6180,10 +6188,15 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		ret = -KVM_ENOSYS;
 	//	if(!read_data_from_guest(vcpu, a0, nem, sizeof(struct NEM_log )))
 	//		printk(KERN_ERR "vmcall sys call:%d\n",nem->syscall_number);
-		if(!read_data_from_guest(vcpu, a0, data, 10))
-			printk(KERN_ERR "function data:%s\n", data);
-	//	if(!read_data_from_guest(vcpu, a0, &task, sizeof(struct task_struct)))
-	//		printk(KERN_ERR "function data:%d\n", task.flags);
+	//	if(!read_data_from_guest(vcpu, a0, data, 10))
+	//		printk(KERN_ERR "function data:%s\n", data);
+	//	if(!read_data_from_guest(vcpu, a0, task, sizeof(struct task_struct))){
+	//		init_task_struct = task;
+	//		printk(KERN_ERR "function comm:%s\n", task->comm);
+	//	}
+		if(!read_data_from_guest(vcpu, a0+0x628, comm, 20)){
+			printk(KERN_ERR "function comm:%s\n", comm);
+		}
 		break;
 	}
 out:

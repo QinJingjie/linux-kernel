@@ -50,10 +50,9 @@
 #include <net/sock.h>
 #include <linux/socket.h>
 #include <linux/kvm_host.h>
-
-#include "nem_interface.h"
 #include <linux/nem_common.h>
 
+#define OFFSET_LEN 6
 
 struct virtual_machine_info {
 	struct kvm_vcpu *vcpu;
@@ -85,7 +84,7 @@ struct virtual_machine_info {
 	}pnode_head;
 	#define first_pnode pnode_head.first
 	#define last_pnode pnode_head.last
-}
+};
 
 struct pnode {
 	/* the vcpu which this process runs on */
@@ -110,6 +109,11 @@ struct task_related_monitor{
 	int mm_start_code_offset; //unsigned long start_code; offset
 };
 
-void* create_vm_info(struct kvm_vcpu *vcpu);		//initialize process monitor information
-//int destroy_vm_info(struct kvm_vcpu *vcpu);		//destroy process monitor information
-int kill_process_by_pid(struct kill_pro_identity* kill_arg);
+//tasks, pid, comm, thread_info, pending, pending_singal
+static unsigned long guest_offset[OFFSET_LEN] = {
+	0x380,0x480,0x628,0x0,0x6a0,0x10
+};
+
+int create_vm_info(struct kvm_vcpu *vcpu);		//initialize process monitor information
+int destroy_vm_info(struct kvm_vcpu *vcpu);		//destroy process monitor information
+int kill_process_by_pid(pid_t pid);
